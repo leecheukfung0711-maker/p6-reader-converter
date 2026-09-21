@@ -1,0 +1,22 @@
+{
+  "colors": {
+    "primary": "#005A53",
+    "primary-dark": "#003531",
+    "primary-active": "#001C19",
+    "accent": "#E88219",
+    "accent-accessible": "#B15315",
+    "accent-selected": "#733208",
+    "text-on-accent": "#001C19",
+    "text": "#333333",
+    "text-muted": "#6C757D",
+    "surface": "#FFFFFF",
+    "surface-subtle": "#F7F7F7",
+    "surface-muted": "#ECECEC",
+    "surface-disabled": "#EAEAEA",
+    "border": "#CECECE",
+    "table-header": "#FFF2EA",
+    "focus": "#005A53",
+    "danger": "#DC3545",
+    "success": "#005A53"
+  }
+}

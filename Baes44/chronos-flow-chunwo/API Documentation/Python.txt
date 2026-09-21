@@ -1,0 +1,119 @@
+# API Reference
+
+**Base URL:** `https://chronos-flow-chunwo.base44.app/api`
+
+## Authentication
+
+```
+Authorization: Bearer YOUR_PERSONAL_ACCESS_TOKEN
+Content-Type: application/json
+```
+
+## User
+
+### Schema
+
+| Field | Type | Required | Description |
+| --- | --- | --- | --- |
+| `email` | string | Yes | The email of the user |
+| `full_name` | string | Yes | The full name of the user |
+| `role` | `admin`, `user` | Yes | The role of the user in the app |
+| `id` | string |  | Unique record identifier |
+| `created_date` | string |  | Record creation timestamp |
+| `updated_date` | string |  | Record last update timestamp |
+| `created_by_id` | string |  | ID of the user who created the record |
+
+### Endpoints
+
+### `GET /entities/User`
+List User records
+Retrieve a list of User records with optional filtering, sorting, and pagination.
+
+**Parameters:**
+- `q` (query): JSON query filter, e.g. {"status":"active"}
+- `limit` (query): Maximum number of records to return
+- `skip` (query): Number of records to skip (pagination)
+- `sort_by` (query): Field name to sort by. Prefix with '-' for descending order, e.g. -created_date
+
+```python
+import requests
+
+headers = {"Authorization": "Bearer YOUR_PERSONAL_ACCESS_TOKEN", "Content-Type": "application/json"}
+response = requests.get("https://chronos-flow-chunwo.base44.app/api/entities/User", headers=headers)
+data = response.json()
+```
+
+### `POST /entities/User`
+Create a User record
+
+```python
+import requests
+
+headers = {"Authorization": "Bearer YOUR_PERSONAL_ACCESS_TOKEN", "Content-Type": "application/json"}
+response = requests.post("https://chronos-flow-chunwo.base44.app/api/entities/User", headers=headers, json={"email":"Example email","full_name":"Example full_name","role":"admin"})
+data = response.json()
+```
+
+### `GET /entities/User/{User_id}`
+Get a User record by ID
+
+**Parameters:**
+- `User_id` (path): Record ID
+
+```python
+import requests
+
+# Replace <User_id> in the URL with an actual Record ID
+headers = {"Authorization": "Bearer YOUR_PERSONAL_ACCESS_TOKEN", "Content-Type": "application/json"}
+response = requests.get("https://chronos-flow-chunwo.base44.app/api/entities/User/<User_id>", headers=headers)
+data = response.json()
+```
+
+### `PUT /entities/User/{User_id}`
+Update a User record
+
+**Parameters:**
+- `User_id` (path): Record ID
+
+```python
+import requests
+
+# Replace <User_id> in the URL with an actual Record ID
+headers = {"Authorization": "Bearer YOUR_PERSONAL_ACCESS_TOKEN", "Content-Type": "application/json"}
+# your data — fill in required fields
+response = requests.put("https://chronos-flow-chunwo.base44.app/api/entities/User/<User_id>", headers=headers, json={})
+data = response.json()
+```
+
+### `DELETE /entities/User/{User_id}`
+Delete a User record
+Soft-deletes the record. Use the restore endpoint to undo.
+
+**Parameters:**
+- `User_id` (path): Record ID
+
+```python
+import requests
+
+# Replace <User_id> in the URL with an actual Record ID
+headers = {"Authorization": "Bearer YOUR_PERSONAL_ACCESS_TOKEN", "Content-Type": "application/json"}
+response = requests.delete("https://chronos-flow-chunwo.base44.app/api/entities/User/<User_id>", headers=headers)
+data = response.json()
+```
+
+## Backend Functions
+
+### `POST /functions/fetchHKHolidays`
+Invoke 'fetchHKHolidays'
+Calls the deployed backend function 'fetchHKHolidays'. Accepts any HTTP method (GET, POST, PUT, DELETE, etc.) — the method and payload are forwarded to the function. POST with a JSON body is shown here as the most common pattern.
+
+**Authentication:** Backend functions do NOT use the `api_key` header. All request headers (including `Authorization`) are forwarded to the function as-is — the function code handles its own authentication.
+
+```python
+import requests
+
+headers = {"Content-Type": "application/json"}
+# your payload
+response = requests.post("https://chronos-flow-chunwo.base44.app/api/functions/fetchHKHolidays", headers=headers, json={})
+data = response.json()
+```

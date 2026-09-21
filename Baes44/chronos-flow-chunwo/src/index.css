@@ -1,0 +1,120 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* ── Common Look and Feel palette (light only) ────────────────────────
+       Source of truth: .agents/skills/common-look-and-feel/theme.css
+       Frontend policy: common-look-and-feel.json                          */
+    --color-primary: #005a53;
+    --color-primary-dark: #003531;
+    --color-primary-active: #001c19;
+    --color-accent: #e88219;
+    --color-accent-accessible: #b15315;
+    --color-accent-selected: #733208;
+    --color-text-on-accent: #001c19;
+    --color-text: #333333;
+    --color-text-muted: #6c757d;
+    --color-surface: #ffffff;
+    --color-surface-subtle: #f7f7f7;
+    --color-surface-muted: #ececec;
+    --color-surface-disabled: #eaeaea;
+    --color-border: #cecece;
+    --color-table-header: #fff2ea;
+    --color-focus: #005a53;
+    --color-danger: #dc3545;
+    --color-success: #005a53;
+
+    /* ── Semantic tokens, derived from the palette above ────────────────── */
+    --background: 0 0% 100%;          /* surface */
+    --foreground: 0 0% 20%;           /* text */
+    --card: 0 0% 100%;                /* surface */
+    --card-foreground: 0 0% 20%;      /* text */
+    --popover: 0 0% 100%;             /* surface */
+    --popover-foreground: 0 0% 20%;   /* text */
+    --primary: 175 100% 18%;          /* primary */
+    --primary-foreground: 0 0% 100%;  /* surface */
+    --primary-dark: 175 100% 10%;     /* primary-dark */
+    --primary-active: 174 100% 5%;    /* primary-active */
+    --secondary: 0 0% 93%;            /* surface-muted */
+    --secondary-foreground: 0 0% 20%;
+    --muted: 0 0% 97%;                /* surface-subtle */
+    --muted-foreground: 208 7% 46%;   /* text-muted */
+    --accent: 30 82% 50%;             /* accent */
+    --accent-foreground: 174 100% 5%; /* text-on-accent */
+    --accent-accessible: 24 79% 39%;  /* accent-accessible */
+    --accent-selected: 24 87% 24%;    /* accent-selected */
+    --destructive: 354 70% 54%;       /* danger */
+    --destructive-foreground: 0 0% 100%;
+    --border: 0 0% 81%;               /* border */
+    --input: 0 0% 81%;                /* border */
+    --ring: 175 100% 18%;             /* focus */
+    --chart-1: 175 100% 18%;          /* primary */
+    --chart-2: 30 82% 50%;            /* accent */
+    --chart-3: 24 79% 39%;            /* accent-accessible */
+    --chart-4: 175 100% 10%;          /* primary-dark */
+    --chart-5: 208 7% 46%;            /* text-muted */
+    --radius: 0.5rem;
+    --sidebar-background: 0 0% 97%;   /* surface-subtle */
+    --sidebar-foreground: 0 0% 20%;   /* text */
+    --sidebar-primary: 175 100% 18%;  /* primary */
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 0 0% 93%;       /* surface-muted */
+    --sidebar-accent-foreground: 0 0% 20%;
+    --sidebar-border: 0 0% 81%;       /* border */
+    --sidebar-ring: 175 100% 18%;     /* focus */
+  }
+}
+
+
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* Thin scrollbar used by the side panels (information panel, settings…) */
+.custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+.custom-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-muted);
+}
+
+/* Gantt table: prevent date inputs from expanding row height */
+.gantt-row td {
+  overflow: hidden;
+  max-height: 26px;
+}
+.gantt-row input[type="date"] {
+  height: 26px !important;
+  max-height: 26px !important;
+  min-height: 0 !important;
+  line-height: 26px !important;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  box-sizing: border-box;
+}

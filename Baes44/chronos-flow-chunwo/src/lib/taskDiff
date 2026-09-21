@@ -1,0 +1,62 @@
+/**
+ * hasTaskDifference — mirrors the difference-highlighting logic in
+ * UnifiedGanttLayout so the filter and the visual highlight stay in sync.
+ *
+ * Returns true when the task shows a comparison bar / comparison milestone
+ * (i.e. it is visually highlighted as having a difference).
+ */
+export function hasTaskDifference(task, columnVisibility) {
+  if (!task || task.isSection) return false;
+
+  const blVisible =
+    columnVisibility?.blStart?.visible !== false ||
+    columnVisibility?.blEnd?.visible !== false;
+  const lateVisible =
+    columnVisibility?.lateStart?.visible !== false ||
+    columnVisibility?.lateEnd?.visible !== false;
+  const earlyVisible =
+    columnVisibility?.earlyStart?.visible !== false ||
+    columnVisibility?.earlyEnd?.visible !== false;
+  const useLateAsComparison = !blVisible && lateVisible;
+  const useEarlyAsComparison = !blVisible && !lateVisible && earlyVisible;
+
+  // Deleted from BL → always a difference (renders a full red bar)
+  if (task.deletedFromBL) return true;
+
+  // Milestone detection (same as UnifiedGanttLayout)
+  const isStartMile = !!task.start && !task.end;
+  const isFinishMile = !task.start && !!task.end;
+  const isMilestone = isStartMile || isFinishMile;
+  const mileDate = isStartMile ? task.start : task.end;
+
+  if (isMilestone) {
+    if (!useLateAsComparison && !useEarlyAsComparison) {
+      const blMileDate = isStartMile ? task.baselineStart : task.baselineFinish;
+      return !!(blMileDate && blMileDate !== mileDate);
+    }
+    const compMileDate = useLateAsComparison
+      ? (isStartMile ? task.lateStart : task.lateEnd)
+      : (isStartMile ? task.earlyStart : task.earlyEnd);
+    return !!(compMileDate && compMileDate !== mileDate);
+  }
+
+  // Normal task: BL / Late / Early bar differs
+  if (!useLateAsComparison && !useEarlyAsComparison) {
+    return !!(
+      task.baselineStart &&
+      task.baselineFinish &&
+      (task.baselineStart !== task.start || task.baselineFinish !== task.end)
+    );
+  }
+  if (useLateAsComparison) {
+    return !!(
+      (task.lateStart || task.lateEnd) &&
+      (task.lateStart !== task.start || task.lateEnd !== task.end)
+    );
+  }
+  // useEarlyAsComparison
+  return !!(
+    (task.earlyStart || task.earlyEnd) &&
+    (task.earlyStart !== task.start || task.earlyEnd !== task.end)
+  );
+}
