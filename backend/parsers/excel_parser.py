@@ -7,8 +7,9 @@ Supports:
   - Generic activity sheets (Type/ID/Activity/Start/End)
   - Multi-programme sheets (prefixed BL/DE/Baseline/Delay date columns)
 """
-import re
 import datetime
+import math
+import re
 
 
 def _parse_date(value):
@@ -23,7 +24,7 @@ def _parse_date(value):
     try:
         num = float(cleaned)
         if 30000 < num < 60000:
-            d = datetime.datetime(1899, 12, 30) + datetime.timedelta(days=num)
+            d = datetime.datetime(1899, 12, 30, tzinfo=datetime.UTC) + datetime.timedelta(days=num)
             return d.strftime("%Y-%m-%d")
     except ValueError:
         pass
@@ -114,14 +115,14 @@ def _p_num(v):
         return None
     try:
         n = float(str(v).replace(",", "."))
-        return None if n != n else n
+        return None if math.isnan(n) else n
     except (ValueError, TypeError):
         return None
 
 
 def _hrs_to_days(v):
     n = _p_num(v)
-    return None if n is None else int(round(n / 8))
+    return None if n is None else round(n / 8)
 
 
 def _p_str(v):
@@ -147,9 +148,7 @@ def _is_p6_activities_sheet(rows):
     row0 = [str(c or "").lower().strip() for c in rows[0]]
     if "task_code" in row0 and "wbs_id" in row0 and "task_name" in row0:
         return True
-    if "activity id" in row0 and "wbs code" in row0 and "activity name" in row0:
-        return True
-    return False
+    return "activity id" in row0 and "wbs code" in row0 and "activity name" in row0
 
 
 def _parse_p6_activities_sheet(rows):
@@ -217,7 +216,7 @@ def _parse_p6_activities_sheet(rows):
                           "activity": section_key or wbs_id or "Imported Activities", "showComparison": False})
             last_wbs_section = section_key
 
-        def cell(col, default=""):
+        def cell(col, default="", row=row):
             if col >= 0 and col < len(row) and row[col] is not None:
                 return row[col]
             return default
@@ -259,7 +258,7 @@ def _parse_p6_activities_sheet(rows):
         if pct_col >= 0:
             v = _p_num(cell(pct_col))
             if v is not None:
-                task["pct"] = int(round(v))
+                task["pct"] = round(v)
         for col, key in (
             (rsrc_col, "primaryResource"), (dur_type_col, "durationType"),
             (pct_type_col, "completePctType"), (status_col, "statusCode"),
@@ -381,7 +380,7 @@ def _parse_p6_sheet(rows, header_row, headers):
         if not row or not any(str(c or "").strip() != "" for c in row):
             continue
 
-        def cell(col):
+        def cell(col, row=row):
             if col >= 0 and col < len(row):
                 return row[col]
             return ""
@@ -415,7 +414,7 @@ def _parse_p6_sheet(rows, header_row, headers):
             if col >= 0:
                 v = _p_num(cell(col))
                 if v is not None:
-                    row_obj[key] = int(round(v))
+                    row_obj[key] = round(v)
         data_rows.append(row_obj)
 
     if not data_rows:
@@ -470,7 +469,7 @@ def _parse_generic_sheet(rows, header_row, headers):
         if not row or not any(str(c or "").strip() != "" for c in row):
             continue
 
-        def cell(col):
+        def cell(col, row=row):
             if col >= 0 and col < len(row):
                 return str(row[col] or "").strip()
             return ""
@@ -554,10 +553,10 @@ def parse_excel(file_bytes, filename=""):
     try:
         from io import BytesIO
         wb = openpyxl.load_workbook(BytesIO(file_bytes), data_only=True)
-    except Exception:
+    except Exception:  # noqa: BLE001 — a broken workbook must fall back to CSV, never abort
         try:
             return _parse_csv(file_bytes.decode("utf-8-sig", errors="replace"))
-        except Exception:
+        except Exception:  # noqa: BLE001 — last resort: report "no activities found"
             return []
 
     all_tasks, seen = [], set()

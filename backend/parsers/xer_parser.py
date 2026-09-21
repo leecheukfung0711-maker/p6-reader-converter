@@ -20,7 +20,7 @@ def parse_xer_tables(text):
     current_fields = []
 
     for line in text.splitlines():
-        if line.startswith("%T\t") or line.startswith("%T "):
+        if line.startswith(("%T\t", "%T ")):
             current_table = line[3:].strip()
             current_fields = []
             tables.setdefault(current_table, [])
@@ -72,7 +72,7 @@ def hrs_to_days(raw):
     n = _to_float(raw)
     if n is None:
         return None
-    return int(round(n / 8))
+    return round(n / 8)
 
 
 def _build_task(t, pred_links_map, original_map):
@@ -111,7 +111,7 @@ def _build_task(t, pred_links_map, original_map):
     if pct_type in ("CP_Phys", "CP_Units"):
         v = _to_float(t.get("phys_complete_pct", ""))
         if v is not None:
-            pct = int(round(v))
+            pct = round(v)
     elif pct_type == "CP_Drtn":
         if status_code == "TK_Complete":
             pct = 100
@@ -124,12 +124,12 @@ def _build_task(t, pred_links_map, original_map):
                 remain is not None and target is not None
                 and target > 0 and remain <= target
             ):
-                pct = int(round((1 - remain / target) * 100))
+                pct = round((1 - remain / target) * 100)
     else:
         raw = t.get("phys_complete_pct") or t.get("sched_complete_pct") or ""
         v = _to_float(raw)
         if v is not None:
-            pct = int(round(v * 100)) if 0 < v <= 1 else int(round(v))
+            pct = round(v * 100) if 0 < v <= 1 else round(v)
 
     bl_start = parse_p6_date(
         t.get("primary_base_start_date") or t.get("secondary_base_start_date")
@@ -146,7 +146,7 @@ def _build_task(t, pred_links_map, original_map):
 
     def extract_hrs(val):
         n = _to_float(val)
-        return None if n is None else int(round(n / 8))
+        return None if n is None else round(n / 8)
 
     def extract_num(val):
         return _to_float(val)
@@ -171,7 +171,7 @@ def _build_task(t, pred_links_map, original_map):
         "relType": link_type,
         "links": links if links else None,
         "remainDur": hrs_to_days(t.get("remain_drtn_hr_cnt", "")),
-        "float": int(round(float_raw / 8)) if float_raw is not None else None,
+        "float": round(float_raw / 8) if float_raw is not None else None,
         "pct": pct,
         "earlyStart": extract_date(t.get("early_start_date", "")),
         "earlyEnd": extract_date(t.get("early_end_date", "")),
@@ -248,7 +248,7 @@ def parse_xer(text):
         link_type = P6_LINK_TYPE.get(p.get("pred_type", ""))
         if not link_type:
             continue
-        lag_days = int(round((_to_float(p.get("lag_hr_cnt", "0")) or 0) / 8))
+        lag_days = round((_to_float(p.get("lag_hr_cnt", "0")) or 0) / 8)
         pred_links.setdefault(pred_code, []).append(
             {"link": link_type, "lag": lag_days, "succCode": succ_code}
         )

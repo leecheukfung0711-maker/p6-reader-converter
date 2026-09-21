@@ -4,7 +4,7 @@ Ported from `py-workflow-programme reader/backend/routers/versions.py`;
 the router prefix is /projects/{project_id}/versions (not /api/projects/...),
 because in this app /api belongs to the Base44 cloud proxy.
 """
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -16,6 +16,11 @@ from database import get_db
 from models import ProgrammeVersion, Project
 
 router = APIRouter(prefix="/projects/{project_id}/versions", tags=["versions"])
+
+
+def _utcnow() -> datetime:
+    """Naive UTC timestamp — identical value to the deprecated `datetime.utcnow()`."""
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 async def _get_project_or_404(project_id: str, db: AsyncSession) -> Project:
@@ -56,7 +61,7 @@ async def create_version(project_id: str, body: dict, db: AsyncSession = Depends
     payload = body.get("payload")
     if payload is None or not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="payload is required")
-    name = body.get("name") or f"Version {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
+    name = body.get("name") or f"Version {_utcnow().strftime('%Y-%m-%d %H:%M')}"
     version = ProgrammeVersion(
         project_id=project_id,
         name=name,

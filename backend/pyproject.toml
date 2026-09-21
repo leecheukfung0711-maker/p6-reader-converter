@@ -24,3 +24,19 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["."]
+
+# ── Ruff (the lint the CI runs: `uv run --with ruff ruff check .`) ────────────
+# Ruff's own default rule set is used on purpose, and the CI pins the ruff
+# version (see .github/workflows/ci.yml) so a new ruff release cannot silently
+# change what "green" means. Only the FastAPI false positive is silenced.
+[tool.ruff]
+target-version = "py311"
+line-length = 120
+extend-exclude = ["db", "__pycache__"]
+
+[tool.ruff.lint]
+ignore = [
+    # FastAPI's documented idiom: Depends(...) / File(...) in argument defaults.
+    # Moving them into the function body would break dependency injection.
+    "B008",
+]

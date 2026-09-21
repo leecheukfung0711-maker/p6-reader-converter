@@ -83,7 +83,7 @@ def parse_p6xml(xml_text):
                     "parentId": _get_text(w, "ParentObjectId") or None,
                 }
 
-            def get_wbs_name(wbs_id):
+            def get_wbs_name(wbs_id, wbs_map=wbs_map):
                 entry = wbs_map.get(wbs_id)
                 return entry["name"] if entry else wbs_id
 
@@ -111,7 +111,7 @@ def parse_p6xml(xml_text):
                     lag_hours = float(_get_text(rel, "Lag") or "0")
                 except ValueError:
                     lag_hours = 0.0
-                lag_days = int(round(lag_hours / HOURS_PER_DAY))
+                lag_days = round(lag_hours / HOURS_PER_DAY)
                 succ_act_id = obj_id_to_act_id.get(succ_obj_id) or succ_obj_id
                 link_code = TYPE_MAP.get(rel_type, "FS")
                 if pred_obj_id and pred_obj_id not in rels_by_pred_obj_id:

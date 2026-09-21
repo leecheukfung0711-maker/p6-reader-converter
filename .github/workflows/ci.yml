@@ -21,7 +21,10 @@ jobs:
         run: uv sync
       - name: Lint with ruff
         working-directory: backend
-        run: uv run --with ruff ruff check .
+        # ruff is pinned on purpose: its default rule set changes between
+        # releases, so CI must not go red just because a newer ruff was
+        # downloaded. Bump the pin deliberately (re-check locally first).
+        run: uv run --with ruff==0.16.8 ruff check .
       - name: Import smoke test
         working-directory: backend
         run: uv run python -c "from main import app; print(app.title)"
@@ -30,33 +33,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Check if frontend scaffold exists
+      - name: Check if the app is present
         id: check
         run: |
-          if [ -f frontend/package.json ]; then
+          if [ -f "Baes44/chronos-flow-chunwo/package.json" ]; then
             echo "exists=true" >> "$GITHUB_OUTPUT"
           else
-            echo "Frontend scaffold not present yet — skipping lint/build."
+            echo "App not present - skipping lint/build/test."
             echo "exists=false" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/setup-node@v4
         if: steps.check.outputs.exists == 'true'
         with:
-          node-version: "20"
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: Baes44/chronos-flow-chunwo/package-lock.json
       - name: Install deps
         if: steps.check.outputs.exists == 'true'
-        working-directory: frontend
-        run: |
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
+        working-directory: Baes44/chronos-flow-chunwo
+        run: npm ci
       - name: Lint
         if: steps.check.outputs.exists == 'true'
-        working-directory: frontend
+        working-directory: Baes44/chronos-flow-chunwo
         run: npm run lint --if-present
       - name: Build
         if: steps.check.outputs.exists == 'true'
-        working-directory: frontend
-        run: npm run build --if-present
+        working-directory: Baes44/chronos-flow-chunwo
+        run: npm run build
+      - name: SSR smoke test
+        if: steps.check.outputs.exists == 'true'
+        working-directory: Baes44/chronos-flow-chunwo
+        run: node scripts/smoke-test.mjs

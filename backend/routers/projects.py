@@ -12,7 +12,7 @@ Differences for this app:
     p6WbsId), which is why POST .../import is a fallback path only - the UI
     parses files in the browser by default.
 """
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import select
@@ -24,6 +24,16 @@ from models import ProgrammeVersion, Project
 from parsers import parse_excel, parse_p6xml, parse_xer
 
 router = APIRouter(prefix="/projects", tags=["projects"])
+
+
+def _utcnow() -> datetime:
+    """Naive UTC timestamp — same value as the deprecated `datetime.utcnow()`.
+
+    The DB columns are naive `DateTime`, so tzinfo is stripped on purpose:
+    `datetime.now(timezone.utc)` is timezone-aware (DTZ003) while the stored
+    value stays byte-identical to the previous behaviour.
+    """
+    return datetime.now(UTC).replace(tzinfo=None)
 
 
 def _project_to_dict(p: Project, version_count: int | None = None) -> dict:
@@ -126,8 +136,8 @@ async def import_file(
             raise HTTPException(status_code=400, detail=f"Unsupported file type: .{ext}")
     except HTTPException:
         raise
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"Failed to parse file: {str(exc)}")
+    except Exception as exc:  # noqa: BLE001 — any parser failure must surface as a 400, not a 500
+        raise HTTPException(status_code=400, detail=f"Failed to parse file: {exc}")
 
     if not tasks:
         raise HTTPException(status_code=400, detail="No activities found in file")
@@ -172,7 +182,7 @@ async def import_file(
 
     project.source_filename = filename
     project.source_format = source_format
-    project.updated_at = datetime.utcnow()
+    project.updated_at = _utcnow()
 
     payload = {
         "tasks": tasks,
@@ -185,7 +195,7 @@ async def import_file(
 
     version = ProgrammeVersion(
         project_id=project.id,
-        name=f"Import {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}",
+        name=f"Import {_utcnow().strftime('%Y-%m-%d %H:%M')}",
         payload=payload,
         is_snapshot=False,
     )
