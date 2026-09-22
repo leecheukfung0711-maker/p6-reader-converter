@@ -4,9 +4,11 @@ import { queryClientInstance } from '@/lib/query-client'
 import { BrowserRouter as Router, Route, Routes } from 'react-router-dom';
 import PageNotFound from './lib/PageNotFound';
 import { AuthProvider, useAuth } from '@/lib/AuthContext';
+import { ProgrammeProvider } from '@/lib/programmeStore';
 import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 // Add page imports here
 import GanttPage from './pages/GanttPage';
+import DataExplorerPage from './pages/DataExplorerPage';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -33,6 +35,7 @@ const AuthenticatedApp = () => {
     <Routes>
       {/* Add your page Route elements here */}
       <Route path="/" element={<GanttPage />} />
+      <Route path="/data-explorer" element={<DataExplorerPage />} />
       <Route path="*" element={<PageNotFound />} />
     </Routes>
   );
@@ -43,12 +46,14 @@ function App() {
 
   return (
     <AuthProvider>
-      <QueryClientProvider client={queryClientInstance}>
-        <Router>
-          <AuthenticatedApp />
-        </Router>
-        <Toaster />
-      </QueryClientProvider>
+      <ProgrammeProvider>
+        <QueryClientProvider client={queryClientInstance}>
+          <Router>
+            <AuthenticatedApp />
+          </Router>
+          <Toaster />
+        </QueryClientProvider>
+      </ProgrammeProvider>
     </AuthProvider>
   )
 }

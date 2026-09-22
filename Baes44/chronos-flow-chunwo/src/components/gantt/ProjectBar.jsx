@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { FolderOpen, Save, Upload, Trash2, Plus, RefreshCw, Check, AlertTriangle } from "lucide-react";
 import { localApi, BACKEND_HINT, isBackendDown } from "@/lib/localApi";
 import { parseXerTables } from "@/lib/parseXER";
+import { tablesWithinLimit, textWithinLimit } from "@/lib/projectOptions";
 // The app's own parsers — the very same ones the Import dialog uses.
 import { parseExcelFile, parseXERFile, parseXMLFile } from "@/components/gantt/ImageImportDialog";
 
@@ -29,7 +30,7 @@ import { parseExcelFile, parseXERFile, parseXMLFile } from "@/components/gantt/I
  */
 const SERVER_PARSE_ON_UPLOAD = false;
 
-export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, lastRecalcDate = "" }) {
+export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, lastRecalcDate = "", xerTables = null, xerText = "" }) {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -64,7 +65,7 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
       await refresh();
       setNewName("");
       setMenuOpen(false);
-      if (onProjectLoaded) onProjectLoaded(project, null, null);
+      if (onProjectLoaded) onProjectLoaded(project, null, null, null);
     } catch (e) {
       console.error("Failed to create project:", e);
       setError(isBackendDown(e) ? BACKEND_HINT : `建立專案失敗：${e.message}`);
@@ -75,7 +76,7 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
     try {
       const project = await localApi.getProject(projectId);
       const payload = project.latest_version?.payload || null;
-      if (onProjectLoaded) onProjectLoaded(project, payload, null);
+      if (onProjectLoaded) onProjectLoaded(project, payload, null, project.latest_version || null);
       setMenuOpen(false);
       setError("");
     } catch (e) {
@@ -103,15 +104,18 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
       const text = await file.text();
       const parsedTasks = parseXERFile(text) || [];
       // Keep every raw table so lossless XER → XER export keeps working.
-      return { tasks: parsedTasks, xerTables: parseXerTables(text), format: "xer" };
+      // Batch 57 — keep the file text too: it is the source of truth the Data
+      // Explorer rebuilds from (and the cheapest way to store "everything").
+      return { tasks: parsedTasks, xerTables: parseXerTables(text), format: "xer", text };
     }
     if (ext === "xml") {
-      const parsedTasks = parseXMLFile(await file.text()) || [];
-      return { tasks: parsedTasks, xerTables: null, format: "xml" };
+      const text = await file.text();
+      const parsedTasks = parseXMLFile(text) || [];
+      return { tasks: parsedTasks, xerTables: null, format: "xml", text };
     }
     if (["xlsx", "xls", "csv"].includes(ext)) {
       const parsedTasks = (await parseExcelFile(file)) || [];
-      return { tasks: parsedTasks, xerTables: null, format: ext === "csv" ? "csv" : "xlsx" };
+      return { tasks: parsedTasks, xerTables: null, format: ext === "csv" ? "csv" : "xlsx", text: null };
     }
     throw new Error(`不支援的檔案類型 .${ext}（可用 .xer / .xml / .xlsx / .xls / .csv）`);
   };
@@ -131,10 +135,10 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
         // Fallback path: the backend parses the file (Python parsers).
         const result = await localApi.importFile(currentProjectId, file, true);
         await refresh();
-        if (onProjectLoaded) onProjectLoaded(result.project, result.payload, null);
+        if (onProjectLoaded) onProjectLoaded(result.project, result.payload, null, result.version || null);
       } else {
         // Default path: parse in the browser, then store the result as a version.
-        const { tasks: parsedTasks, xerTables, format } = await parseFileInBrowser(file);
+        const { tasks: parsedTasks, xerTables, format, text: fileText } = await parseFileInBrowser(file);
         if (!parsedTasks.length) throw new Error("檔案中找不到任何 activity。");
         const payload = {
           tasks: parsedTasks,
@@ -143,6 +147,12 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
             // Batch 27: keep the programme's data date with the version.
             ...(lastRecalcDate ? { last_recalc_date: lastRecalcDate } : {}),
           },
+          // Batch 53 — keep the file's raw tables with the version, so the Data
+          // Explorer shows every table (PROJECT / TASKPRED / RSRC …) for it.
+          ...(xerTables && tablesWithinLimit(xerTables) ? { xerTables } : {}),
+          // Batch 57 — and its text, so every table can be rebuilt even when the
+          // parsed tables were too big for the limit above.
+          ...(fileText && textWithinLimit(fileText) ? { xerText: fileText } : {}),
         };
         const version = await localApi.createVersion(
           currentProjectId,
@@ -152,7 +162,7 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
         );
         const project = projects.find((p) => p.id === currentProjectId) || { id: currentProjectId };
         await refresh();
-        if (onProjectLoaded) onProjectLoaded(project, version.payload || payload, xerTables);
+        if (onProjectLoaded) onProjectLoaded(project, version.payload || payload, xerTables, version || null);
       }
     } catch (err) {
       console.error("Import failed:", err);
@@ -179,6 +189,11 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
             // Batch 27: the data date travels with the stored programme.
             ...(lastRecalcDate ? { last_recalc_date: lastRecalcDate } : {}),
           },
+          // Batch 53 — hand the current raw tables to the new version too.
+          ...(xerTables && tablesWithinLimit(xerTables) ? { xerTables } : {}),
+          // Batch 57 — and the file text, so the Explorer can rebuild every table
+          // and the Gantt can re-export the file even without the parsed tables.
+          ...(xerText && textWithinLimit(xerText) ? { xerText } : {}),
         },
         `Save ${new Date().toLocaleString()}`,
         false

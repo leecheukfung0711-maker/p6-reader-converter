@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef, useMemo, useEffect } from "react";
-import { Download, Upload, Trash2, RefreshCw, Undo, Redo, Link2, Search, GitCompare, Settings } from "lucide-react";
+import { Link } from "react-router-dom";
+import { Download, Upload, Trash2, RefreshCw, Undo, Redo, Link2, Search, GitCompare, Settings, Table2 } from "lucide-react";
 import HeaderDropdown from "@/components/gantt/HeaderDropdown";
 import XmlRelationshipEditor from "@/components/gantt/XmlRelationshipEditor";
 import XerMappingDialog from "@/components/gantt/XerMappingDialog";
@@ -26,6 +27,10 @@ import ProjectBar from "@/components/gantt/ProjectBar";
 import QuickFilterMenu from "@/components/gantt/QuickFilterMenu";
 import { applyQuickFilters, defaultQuickFilters, normalizeRecalcDate, recalcDateFromXerTables } from "@/lib/quickFilters";
 import { inferSectionLevels } from "@/lib/wbsLevel";
+import { parseXER, parseXerTables } from "@/lib/parseXER";
+import { tablesFromXml } from "@/lib/dataExplorer";
+import { useProgramme } from "@/lib/programmeStore";
+import { localApi } from "@/lib/localApi";
 
 const MIN_TABLE_W = 280;
 const MAX_TABLE_W = 1400;
@@ -75,16 +80,30 @@ function parseExcelDate(value) {
 }
 
 export default function GanttPage() {
+  // ── Batch 49/54 — one shared programme for both pages ───────────────────────
+  // Read it FIRST so the very first paint already shows the shared programme —
+  // otherwise the page flashes the default programme until the restore effect runs.
+  const { programme: sharedProgramme, publishProgramme } = useProgramme();
+  const mirroredRevision = useRef(0);
+  const appliedVersionRef = useRef(null);   // the stored version already loaded
+  // (the mirror effect lives below `handleProjectLoaded`, which it calls)
+
   const [tasks, setTasks] = useState(() => {
+    // Prefer the shared programme: swapping pages must never drop it.
+    if (sharedProgramme?.tasks?.length) return sharedProgramme.tasks;
     // Initialize with a fresh copy of DEFAULT_TASKS
     return JSON.parse(JSON.stringify(DEFAULT_TASKS));
   });
   const [searchQuery, setSearchQuery] = useState("");
   // Track nextId in state to avoid global variable issues
-  const [nextId, setNextId] = useState(() => getNextId(DEFAULT_TASKS));
+  const [nextId, setNextId] = useState(
+    () => getNextId(sharedProgramme?.tasks?.length ? sharedProgramme.tasks : DEFAULT_TASKS)
+  );
   
   const [labelOffsets, setLabelOffsets] = useState({});
-  const [history, setHistory] = useState(() => [JSON.parse(JSON.stringify(DEFAULT_TASKS))]);
+  const [history, setHistory] = useState(
+    () => [sharedProgramme?.tasks?.length ? sharedProgramme.tasks : JSON.parse(JSON.stringify(DEFAULT_TASKS))]
+  );
   const [historyIndex, setHistoryIndex] = useState(0);
   const [labelOffsetsHistory, setLabelOffsetsHistory] = useState([{}]);
   const [holidaySource, setHolidaySource] = useState(null);
@@ -322,9 +341,9 @@ export default function GanttPage() {
   // Batch 27 — Last Recalc Date line on the chart (the programme's data date).
   // Toggleable in Other Settings ▸ Display; drawn only once a date exists.
   const [showRecalcLine, setShowRecalcLine] = useState(true);
-  const [projectTitle, setProjectTitle] = useState("Project Gantt Chart");
+  const [projectTitle, setProjectTitle] = useState(() => sharedProgramme?.fileName || "Project Gantt Chart");
   // Active project in the LOCAL backend (project + version storage) — see ProjectBar.
-  const [currentProjectId, setCurrentProjectId] = useState(null);
+  const [currentProjectId, setCurrentProjectId] = useState(() => sharedProgramme?.projectId || null);
   const [showExport, setShowExport] = useState(false);
   const [showImageImport, setShowImageImport] = useState(false);
   const [importInitialFile, setImportInitialFile] = useState(null);
@@ -360,8 +379,12 @@ export default function GanttPage() {
   const [showGlobalSettings, setShowGlobalSettings] = useState(false);
   // Raw XER tables of the imported programme (null when it did not come from an XER).
   // Passed to the export dialogs so XER → XER keeps every table and every value.
-  const [xerSource, setXerSource] = useState(null);
+  const [xerSource, setXerSource] = useState(() => sharedProgramme?.tables || null);
   const [showInfoPanel, setShowInfoPanel] = useState(false);
+
+  // ── Batch 49 — one shared programme for both pages ─────────────────────────
+  // (the store hook itself is read at the top of the component, before the state
+  //  initialisers, so the first paint already uses the shared programme.)
 
   // Last Recalc Date (batch 21): prefill from the imported programme
   // (`PROJECT.last_recalc_date`) and re-read it whenever another file is loaded.
@@ -582,29 +605,152 @@ export default function GanttPage() {
   // Mirrors what an import does: resolve relationship links, push an undo step,
   // replace the task list, and keep the raw XER tables (for lossless XER export)
   // when the payload came straight from an uploaded .xer file.
-  const handleProjectLoaded = useCallback((project, payload, xerTables) => {
+  const handleProjectLoaded = useCallback((project, payload, xerTables, version = null) => {
+    // Batch 53 — a stored version may carry the file's own raw tables.
+    const storedTables = payload?.xerTables && typeof payload.xerTables === "object" ? payload.xerTables : null;
+    // Batch 57 — and the file text, so every table can be rebuilt even when the
+    // parsed tables were too big to keep with the version.
+    const storedText = typeof payload?.xerText === "string" ? payload.xerText : "";
+    const storedFormat = payload?.meta?.source_format || (storedText ? "xer" : null);
+    const rebuiltTables = !storedTables && storedText
+      ? (storedFormat === "xml" ? tablesFromXml(storedText) : parseXerTables(storedText))
+      : null;
+    const sourceTables = storedTables || rebuiltTables || xerTables || null;
+    // Batch 58 — remember which version this is, so the mirror effect below never
+    // re-loads a *stale* version id on top of the project the user just clicked.
+    if (version?.id) appliedVersionRef.current = String(version.id);
     if (project) {
       setCurrentProjectId(project.id);
       if (project.name) setProjectTitle(project.name);
     } else {
       setCurrentProjectId(null);
     }
+    // Batch 59 — the tasks this load applied travel with the publish, so the shared
+    // programme can never keep the PREVIOUS programme's tasks and hand them back
+    // through the mirror effect below (that was the flash back to the old programme).
+    let publishTasks = null;
     if (payload && Array.isArray(payload.tasks)) {
       // Batch 23C: a programme stored by the local backend (Excel/PDF import
       // path) may have flat sections — fill levels in from the numbering too.
       const { tasks: levelled } = inferSectionLevels(payload.tasks);
       const resolvedTasks = resolveImportedLinks(levelled);
       saveToHistory(tasks);
-      if (xerTables) setXerSource(xerTables);
+      if (sourceTables) setXerSource(sourceTables);
       setTasks(resolvedTasks);
+      publishTasks = resolvedTasks;
       // Batch 27: the stored version carries the programme's Last Recalc Date,
       // so the data date comes back with the programme (XER value as a fallback).
       const savedRecalc = normalizeRecalcDate(payload?.meta?.last_recalc_date);
-      setLastRecalcDate(savedRecalc || recalcDateFromXerTables(xerTables));
+      setLastRecalcDate(savedRecalc || recalcDateFromXerTables(sourceTables));
       setNextId(getNextId(resolvedTasks) + 1);
       setSelectedIds(new Set());
     }
-  }, [saveToHistory, tasks]);
+    // Batch 49/53/57/59 — publish to the shared programme (tables, the file text *and*
+    // the tasks included) so the Data Explorer opens the same thing straight away.
+    publishProgramme({
+      fileName: project?.name || "",
+      tables: sourceTables,
+      ...(publishTasks ? { tasks: publishTasks } : {}),
+      format: sourceTables ? (storedFormat || "xer") : null,
+      text: storedText,         // batch 57 — the version's own file text (never stale)
+      projectId: project ? (project.id ?? null) : null,
+      projectName: project?.name || "",
+      versionId: version?.id ? String(version.id) : null,
+      versionName: version?.name || "",
+    }, "gantt");
+  }, [saveToHistory, tasks, publishProgramme]);
+
+  // ── Batch 49/50 — mirror the Data Explorer's programme into this page ───────
+  // The Explorer can load a file or pick a stored project; both are published with
+  // source "explorer". Guarded by revision so our own publishes never loop back,
+  // and wrapped so a broken shared programme can never destroy the current view.
+  // (This effect lives after `handleProjectLoaded` because it calls it.)
+  useEffect(() => {
+    if (!sharedProgramme || !sharedProgramme.revision) return;
+    if (sharedProgramme.revision === mirroredRevision.current) return;
+    mirroredRevision.current = sharedProgramme.revision;
+
+    // (1) Batch 54/58 — a stored VERSION was picked in the Explorer: load exactly that
+    //     version. Guarded on the Explorer being the source: a project picked here in
+    //     ProjectBar (whose publish records its own version) must never be undone by a
+    //     *stale* versionId left in the shared store — that was the reported flash back.
+    if (sharedProgramme.source === "explorer" && sharedProgramme.projectId && sharedProgramme.versionId
+      && String(sharedProgramme.versionId) !== appliedVersionRef.current) {
+      appliedVersionRef.current = String(sharedProgramme.versionId);
+      let cancelled = false;
+      (async () => {
+        try {
+          const version = await localApi.getVersion(sharedProgramme.projectId, sharedProgramme.versionId);
+          if (cancelled || !version) return;
+          handleProjectLoaded(
+            { id: sharedProgramme.projectId, name: sharedProgramme.projectName || "" },
+            version.payload || null,
+            null,
+            version
+          );
+        } catch {
+          /* backend down — keep the current programme */
+        }
+      })();
+      return () => { cancelled = true; };
+    }
+
+    // (2) Batch 52 — restore the shared project, whichever page picked it. Without
+    //     this the Gantt page would fall back to its default programme whenever it
+    //     is re-mounted (navigating Gantt → Explorer → Gantt).
+    if (sharedProgramme.projectId && sharedProgramme.projectId !== currentProjectId) {
+      let cancelled = false;
+      (async () => {
+        try {
+          const project = await localApi.getProject(sharedProgramme.projectId);
+          if (cancelled || !project) return;
+          handleProjectLoaded(project, project.latest_version?.payload || null, null, project.latest_version || null);
+        } catch {
+          /* backend down — keep the current programme */
+        }
+      })();
+      return () => { cancelled = true; };
+    }
+
+    // (3) Batch 54/59 — a PEER page (the Explorer) published the same programme's
+    //     tasks: reuse what the store kept. Guarded on the source, so a publish this
+    //     page made itself can never put a stale programme back on screen.
+    if (sharedProgramme.source === "explorer" && sharedProgramme.tasks && sharedProgramme.tasks !== tasks) {
+      saveToHistory(tasks);
+      setTasks(sharedProgramme.tasks);
+      if (sharedProgramme.tables) setXerSource(sharedProgramme.tables);
+      if (sharedProgramme.fileName) setProjectTitle(sharedProgramme.fileName);
+      setSelectedIds(new Set());
+      return;
+    }
+
+    // (4) Files: mirror what the Data Explorer loaded (batch 49).
+    if (sharedProgramme.source !== "explorer") return;
+    if (sharedProgramme.tables) setXerSource(sharedProgramme.tables);
+    if (sharedProgramme.fileName) setProjectTitle(sharedProgramme.fileName);
+    if (sharedProgramme.format !== "xer" || !sharedProgramme.text) return;
+    try {
+      const parsedTasks = parseXER(sharedProgramme.text);
+      if (!Array.isArray(parsedTasks) || !parsedTasks.length) return;
+      const { tasks: levelled } = inferSectionLevels(parsedTasks);
+      saveToHistory(tasks);
+      setTasks(resolveImportedLinks(levelled));
+      setSelectedIds(new Set());
+      if (!sharedProgramme.tables) setXerSource(parseXerTables(sharedProgramme.text));
+    } catch {
+      /* keep the current programme when the shared one cannot be parsed */
+    }
+  }, [sharedProgramme, currentProjectId, handleProjectLoaded, publishProgramme, tasks, saveToHistory]);
+
+  // Batch 54 — keep the shared programme's tasks in step (reference-guarded), so the
+  // Data Explorer and any remount of this page always see the same programme.
+  // Debounced: edits (drag, cell, undo) publish once they settle, so the two pages
+  // stay in step without re-rendering on every keystroke.
+  useEffect(() => {
+    if (!tasks || sharedProgramme?.tasks === tasks) return;
+    const t = setTimeout(() => publishProgramme({ tasks }, "gantt"), 800);
+    return () => clearTimeout(t);
+  }, [tasks, sharedProgramme?.tasks, publishProgramme]);
 
   // ── Data for the unified settings panel (GlobalSettingsPanel) ──
   // These lived in the header "Display" dropdown before; the panel's "Other"
@@ -710,6 +856,8 @@ export default function GanttPage() {
             currentProjectId={currentProjectId}
             tasks={tasks}
             lastRecalcDate={lastRecalcDate}
+            xerTables={xerSource}
+            xerText={sharedProgramme?.text || ""}
             onProjectLoaded={handleProjectLoaded}
           />
         </div>
@@ -803,6 +951,12 @@ export default function GanttPage() {
             label="Tools"
           >
             <div className="flex flex-col gap-0.5" onClick={e => e.stopPropagation()}>
+              <Link
+                to="/data-explorer"
+                className="w-full text-left px-3 py-1.5 rounded text-xs font-medium text-text hover:bg-surface-muted flex items-center gap-2"
+              >
+                <Table2 size={14} /> Data Explorer
+              </Link>
               <button
                 onClick={() => setShowCompare(true)}
                 className="w-full text-left px-3 py-1.5 rounded text-xs font-medium text-text hover:bg-surface-muted flex items-center gap-2"
@@ -1044,11 +1198,18 @@ export default function GanttPage() {
         <ImageImportDialog
           initialFile={importInitialFile}
           onClose={() => { setShowImageImport(false); setImportInitialFile(null); }}
-          onSetProjectTitle={(fileName) => setProjectTitle(fileName)}
+          onSetProjectTitle={(fileName) => {
+            setProjectTitle(fileName);
+            publishProgramme({ fileName: fileName || "" }, "gantt");   // batch 49 — shared with the Data Explorer
+          }}
           onImport={(rawTasks, importMode, fileType, xerTables, meta) => {
             const wbsLevelStats = meta?.wbsLevels;
             const coverage = meta?.coverage;
-            if (xerTables) setXerSource(xerTables);   // enables lossless XER → XER export
+            if (xerTables) {
+              setXerSource(xerTables);   // enables lossless XER → XER export
+              // Batch 49 — the Data Explorer opens the same programme straight away.
+              publishProgramme({ tables: xerTables, format: "xer" }, "gantt");
+            }
             saveToHistory(tasks);
             if (importMode === "set_baseline") {
               // Build a lookup: activityId (case-insensitive) → { blStart, blEnd, raw }

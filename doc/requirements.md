@@ -4418,3 +4418,756 @@ As a **planner**, I want **clicking an activity to emphasise only the relationsh
 | NFR-4702 | 幾何路徑與資料來源不變 | UnifiedGanttLayout | No regression risk | Verified |
 | AC-4701 | smoke test 90 OK / 0 FAIL、eslint 0、vite build 0、模組 200 | 量測（2026-09-22） | Planner wants a safe change | Verified |
 
+---
+
+## 📦 Batch 48 — 全新獨立頁面：P6 Data Explorer（原始數據表瀏覽，參考 xerviewer.org）
+
+### 使用者需求（2026-09-22）
+> 「參考 https://www.xerviewer.org/ 增加一整個數據解析展示的頁面，製作一片**新的獨立頁面**顯示：左側 Tables 側欄（分類摺疊清單）＋右上表名／篩選／Export to Excel＋內容卡片（General／Dates／Settings／Defaults／Calculations／Other）＋頁尾 Displaying N properties…／Current File…／Total Displayable Tables…」
+
+### User Story
+As a **planner / data reviewer**, I want **a dedicated page that lists every raw table of my P6 file and shows the records inside them**, so that **I can inspect data the Gantt view never shows (codes, resources, financial, UDF …) without leaving the app**.
+
+### Requirements
+- **Functional**
+  - FR-4801：獨立頁面 `/data-explorer`（P6 Data Explorer），可由 Gantt 工具列 **Tools ▸ Data Explorer** 進入，頁內有 **Back to Gantt** 返回。
+  - FR-4802：載入 **XER**（用既有 `parseXerTables()` 取出檔案內**每一張** `%T` 表）或 **P6 XML**（以元素標籤分組、屬性為欄位）；支援點選與**拖放**，可 Clear 重載；檔案只在瀏覽器內處理、不上傳。
+  - FR-4803：左側 **Tables** 側欄依 7 分類呈現（Project Structure／Resources／Codes／Financial／Documents／User Defined／Other），每組可摺疊、顯示各表筆數，並有**表名搜尋**；側欄可整組收合／展開。
+  - FR-4804：主區依表性質自動選檢視：**單筆 → 屬性卡片**（General／Dates／Settings／Defaults／Calculations／Other）；**多筆 → 資料表格**（表頭固定、zebra 列、欄位顯示可讀標籤）。
+  - FR-4805：主區上方有**欄位／屬性篩選**（同時比對原始欄名與可讀標籤）＋ **Export to Excel**（`xlsx`，匯出目前表、欄位保留原始欄名）。
+  - FR-4806：頁尾顯示 **Displaying N properties/columns for table 'X'**、**Current File**、**Total Displayable Tables**。
+  - FR-4807：空值（`""`／`null`）一律顯示 **N/A**（斜體淡化）；≥500 筆的表先渲染前 500 列並註明。
+- **Non-Functional**
+  - NFR-4801：純前端、**零上傳**；沿用既有 parser，不在解析器內新增邏輯。
+  - NFR-4802：**Common Look and Feel（light-only）**——只用專案 palette token（`surface*`／`text*`／`border`／`primary`／`table-header`／`accent-selected`／`danger`／`focus`），**不得**沿用參考站的 slate/blue，也不得出現 `dark:`／`prefers-color-scheme`（由 smoke test palette guard 強制）。
+  - NFR-4803：不影響既有 Gantt 頁與列印／PDF 輸出（只新增路由與一個連結）。
+- **Constraints**：資料層全部放 `src/lib/dataExplorer.js`（純函式、可直接斷言）；UI 為 presentational `TableBrowser`（可 SSR 測試）。
+
+### 實作
+| 檔案 | 內容 |
+|---|---|
+| `src/lib/dataExplorer.js`（新） | `categoriseTable`／`buildTableIndex`／`groupTableIndex`／`filterTableIndex`／`columnKeys`／`formatCell`／`fieldLabel`（＋`FIELD_LABELS`）／`propertyGroupsFor`（＋`PROPERTY_GROUPS`）／`visibleRows`／`tablesFromXml` |
+| `src/components/dataexplorer/TableBrowser.jsx`（新） | 側欄（分類／摺疊／搜尋／收合）＋主區（卡片或表格）＋頁尾統計；`data-*` 供測試（`data-category`／`data-table-name`／`data-active-table`／`data-view`／`data-row-count`／`data-table-count`） |
+| `src/pages/DataExplorerPage.jsx`（新） | 檔案選擇／拖放、依副檔名解析（`.xer`／`.xml`）、錯誤與讀取狀態、Excel 匯出、Back to Gantt |
+| `src/App.jsx` | 新增 `DataExplorerPage` import 與 `<Route path="/data-explorer" …>` |
+| `src/pages/GanttPage.jsx` | Tools 下拉新增 **Data Explorer** 連結（`Link to="/data-explorer"`） |
+| `scripts/smoke-test.mjs` | 批次 48 三段回歸測試（helpers／render／wiring＋palette guard） |
+
+### 驗證（TDD：先 RED 再 GREEN）
+1. **RED**：先寫測試 → `Data Explorer (batch 48): FAILED: Error: Failed to load url /src/lib/dataExplorer.js … Does the file exist?` ✓
+2. **GREEN**：實作後 → 三段全綠，總計 **93 OK / 0 FAIL**（90 + 新增 3）、`eslint` exit 0、`vite build` exit 0
+3. 模組健康：`/data-explorer`、`/src/pages/DataExplorerPage.jsx`、`/src/components/dataexplorer/TableBrowser.jsx`、`/src/lib/dataExplorer.js` 全部 HTTP 200
+4. **真實 XER 語法端對端**：以合成 `%T/%F/%R` 檔餵既有 `parseXerTables()` → `PROJECT(1), RSRC(1), TASK(2), TASKPRED(1)`；側欄 `Project Structure=3, Resources=1`；PROJECT 卡片 `general[2] dates[2] defaults[1] other[1]`；`proj_id=HOSPEXP`、空值 → `N/A` ✓
+
+**RTM（批次 48）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-4801 | 獨立頁面 /data-explorer ＋ Gantt Tools 入口 ＋ 返回連結 | `src/pages/DataExplorerPage.jsx`、`App.jsx`、`GanttPage.jsx` | Reviewer wants a dedicated data page | Verified |
+| FR-4802 | 載入 XER（全表）／P6 XML；支援拖放與 Clear；零上傳 | DataExplorerPage ＋ `parseXerTables`／`tablesFromXml` | Reviewer wants to open any programme | Verified |
+| FR-4803 | 7 分類側欄、可摺疊、筆數、表名搜尋、可收合 | `TableBrowser`＋`groupTableIndex`／`filterTableIndex` | Reviewer wants to find a table fast | Verified |
+| FR-4804 | 單筆 → 屬性卡片（6 分組）；多筆 → 資料表格 | `TableBrowser`＋`propertyGroupsFor` | Reviewer wants readable records | Verified |
+| FR-4805 | 欄位／屬性篩選 ＋ Export to Excel（目前表） | `TableBrowser`＋`xlsx` | Reviewer wants to export/apart | Verified |
+| FR-4806 | 頁尾統計（properties／Current File／Total Displayable Tables） | `TableBrowser` footer | Reviewer wants context | Verified |
+| FR-4807 | 空值顯示 N/A；≥500 列先截斷並註明 | `formatCell`／`visibleRows` | Reviewer wants honest values | Verified |
+| NFR-4801 | 純前端零上傳、沿用既有 parser | DataExplorerPage | Privacy | Verified |
+| NFR-4802 | 只用 palette token、light-only、無 slate/blue 或 dark: | `TableBrowser`／DataExplorerPage（smoke palette guard） | Common Look and Feel | Verified |
+| NFR-4803 | 不影響既有 Gantt 與列印／PDF | 只新增路由＋連結 | No regression | Verified |
+| AC-4801 | smoke 93 OK / 0 FAIL、eslint 0、build 0、模組 200、真實 XER 端對端 | 量測（2026-09-22） | Reviewer wants a safe new page | Verified |
+
+---
+
+## 📦 Batch 49 — 兩頁共用同一個 Programme（Gantt ⇄ P6 Data Explorer 同步）
+
+### 使用者需求（2026-09-22）
+> 「如果我在 Gantt 那邊已經上傳過了 XER 文件，那麽也應該同步到 P6 Data Explorer 裏，并且資料與選擇專案同步，兩邊的數據與資料都應該同步。」
+
+### User Story
+As a **planner**, I want **the Gantt page and the Data Explorer to share the same loaded programme and the same selected project**, so that **I never upload the same XER twice or wonder which file each page is showing**.
+
+### Requirements
+- **Functional**
+  - FR-4901：新增共用狀態 `ProgrammeProvider`（包住兩個路由）：`{ fileName, format, tables, text, projectId, projectName, source, revision }`——兩頁的**單一真相來源**。
+  - FR-4902：**Gantt → Explorer**：Gantt 載入 XER（上傳／`onImport`）或從 ProjectBar 載入專案／版本時，發佈 `tables`／`fileName`／`projectId`／`projectName`；Explorer 開啟即**直接顯示**（檔名、表格、專案）並標示來源徽章「**Loaded in the Gantt page**」。
+  - FR-4903：**Explorer → Gantt**：Explorer 載入 `.xer` 時發佈 `text`＋`tables`；Gantt 監聽（`source==="explorer"` 且 `revision` 有變）後以既有流程重建（`parseXER` → `inferSectionLevels` → `resolveImportedLinks`）、更新 `xerSource`／標題、清空選取；解析失敗時**保留**目前畫面（try/catch）。
+  - FR-4904：**防迴圈**：以 `revision` ＋ `source` 判斷，Gantt 自己發佈的變更不會再被自己消費。
+  - FR-4905：**持久化**：localStorage 只存輕量資料（檔名／格式／專案／來源／revision）與 **≤ 2 MB** 的檔案文字；超過即整筆跳過（回傳 false）；已解析的 `tables` 只留記憶體。
+  - FR-4906：Explorer 重新載入後若只有持久化的 `text`，會**自動重建** tables（`parseXerTables`／`tablesFromXml`）；Explorer 的 Clear 同時清除共用狀態。
+- **Non-Functional**
+  - NFR-4901：`useProgramme()` 在無 Provider 時回傳安全 no-op（smoke test 直接 render GanttPage 不會因缺 Provider 而失敗）。
+  - NFR-4902：不得破壞既有 Gantt 行為（匯入、undo、Last Recalc Date、XER→XER 匯出皆維持）。
+  - NFR-4903：不新增任何網路請求；XER／XML 仍只在瀏覽器內處理。
+- **Constraints**：僅新增 `src/lib/programmeStore.jsx` 並在 App／GanttPage／DataExplorerPage 接線；不改解析器與後端。
+
+### 實作
+| 檔案 | 內容 |
+|---|---|
+| `src/lib/programmeStore.jsx`（新） | `ProgrammeProvider`／`useProgramme`／`emptyProgramme`／`readPersistedProgramme`／`writePersistedProgramme`（`PROGRAMME_STORAGE_KEY="p6_shared_programme"`、`MAX_PERSISTED_TEXT=2 MB`） |
+| `src/App.jsx` | 以 `<ProgrammeProvider>` 包住路由 |
+| `src/pages/GanttPage.jsx` | `useProgramme()` ＋ 3 個發佈點（`onSetProjectTitle`／`onImport`（有 `xerTables` 時）／`handleProjectLoaded`）＋ mirror effect（`mirroredRevision` 防迴圈） |
+| `src/pages/DataExplorerPage.jsx` | 讀共用狀態（`viewTables = local \\|\\| shared`）、來源徽章 `data-shared-programme`、載入即發佈、Clear 同步清除、由 `text` 重建 tables |
+| `scripts/smoke-test.mjs` | 批次 49 回歸測試（持久化契約／Explorer 渲染共用資料＋徽章／接線守門） |
+
+### 驗證（TDD：先 RED 再 GREEN）
+1. **RED**：先寫測試 → `Shared programme store (batch 49): FAILED: Error: Failed to load url /src/lib/programmeStore.jsx … Does the file exist?` ✓
+2. **GREEN**：實作後 → `OK (metadata persisted + restored, oversized payloads skipped, Explorer renders the Gantt-loaded file/project/tables with a provenance hint, both pages publish, routes wrapped)`；總計 **94 OK / 0 FAILED**（93 + 新增 1）、`eslint` exit 0、`vite build` exit 0
+3. 模組健康：`/data-explorer`、`programmeStore.jsx`、`DataExplorerPage.jsx`、`GanttPage.jsx`、`App.jsx`、`/` 全部 HTTP 200
+
+**RTM（批次 49）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-4901 | 共用狀態 Provider（兩頁單一真相來源） | `src/lib/programmeStore.jsx` ＋ `App.jsx` | Planner wants one programme for both pages | Verified |
+| FR-4902 | Gantt 載入後 Explorer 直接顯示（含來源徽章） | GanttPage 3 個發佈點 ＋ DataExplorerPage | Planner wants no second upload | Verified |
+| FR-4903 | Explorer 載入 XER 後 Gantt 同步重建 tasks | GanttPage mirror effect | Planner wants both sides in step | Verified |
+| FR-4904 | revision ＋ source 防迴圈 | programmeStore／GanttPage | No feedback loops | Verified |
+| FR-4905 | 只持久化輕量資料 ＋ ≤2 MB 文字 | `writePersistedProgramme` | Storage quota safety | Verified |
+| FR-4906 | 由持久化 text 重建 tables；Clear 同步清除 | DataExplorerPage | Reload-friendly | Verified |
+| NFR-4901 | 無 Provider 時安全 no-op | `useProgramme` | No regression in tests | Verified |
+| NFR-4902 | 既有 Gantt 行為不變 | GanttPage | No regression | Verified |
+| NFR-4903 | 零網路請求、純前端 | 全部 | Privacy | Verified |
+| AC-4901 | smoke 94 OK / 0 FAILED、eslint 0、build 0、模組全 200 | 量測（2026-09-22） | Planner wants a safe sync | Verified |
+
+---
+
+## 📦 Batch 50 — Data Explorer 專案選擇器（與 Gantt 的「選擇專案」雙向同步）
+
+### 使用者需求（2026-09-22）
+> 「Explorer 也要能切換專案（加專案選擇器，雙向同步）」
+
+### User Story
+As a **planner**, I want **to switch the active project from the Data Explorer as well**, so that **both pages always work on the same stored project — whichever page I pick it in**.
+
+### Requirements
+- **Functional**
+  - FR-5001：Explorer 標題列新增**專案選擇器**：列出本地後端專案（`localApi.listProjects`）、可手動刷新、顯示已選專案；後端未啟動時停用並顯示 `BACKEND_HINT`。
+  - FR-5002：切換專案 → `localApi.getProject(id)` → 發佈 `{ projectId, projectName, fileName, format, tables: null, text: "" }`（`source:"explorer"`）——**清掉上一份檔案的共享表**，避免顯示舊資料。
+  - FR-5003：後端版本只存已解析活動（`{ tasks, meta }`，無原始表）→ Explorer 以 `storedVersionTables()` 把該版本活動呈現為 **`TASK` 表**（欄位沿用 XER 欄名，可讀標籤與 TASK 分類照常生效）。
+  - FR-5004：**Explorer → Gantt**：Gantt 開啟時若發現 `source:"explorer"` 且 `projectId` ≠ 目前專案 → `localApi.getProject` → 走 **ProjectBar 同一條載入路徑**（`handleProjectLoaded(project, latest_version.payload, null)`）→ 之後以 `source:"gantt"` 回寫（含 `projectId`），Explorer 的選擇器顯示同一個專案（**雙向**）。
+  - FR-5005：**Gantt → Explorer**：ProjectBar 選專案（`handleProjectLoaded`）已會發佈 `projectId`／`projectName` → Explorer 選擇器 `value` 同步。
+  - FR-5006：顯示檔名優先序：本頁載入的檔案 → 共享狀態的檔名 → 所選專案版本的 `meta.source_filename`。
+- **Non-Functional**
+  - NFR-5001：鏡射 effect 必須放在 `handleProjectLoaded` **之後**（依賴陣列求值時機），否則 TDZ crash——由 smoke test 的「GanttPage full page render」把關。
+  - NFR-5002：後端不可用時只顯示提示、不影響本頁既有的檔案瀏覽；版本沒有 `latest_version` 時 `storedVersionTables` 回 `null`（保留畫面上既有表格）。
+  - NFR-5003：選擇器只用 Common Look and Feel palette（由測試的 palette guard 把關）。
+- **Constraints**：新增 `src/lib/projectOptions.js` 與 `src/components/dataexplorer/ProjectSelector.jsx`；不更動後端 API 與 ProjectBar。
+
+### 實作
+| 檔案 | 內容 |
+|---|---|
+| `src/lib/projectOptions.js`（新） | `projectOptions`（排序後的選項）、`findProjectById`、`versionSummary`（版本名／筆數／來源檔名／格式／recalc）、`storedVersionTables`（版本活動 → `TASK` 表） |
+| `src/components/dataexplorer/ProjectSelector.jsx`（新） | 純呈現：`projects`／`value`／`onChange`／`loading`／`error`／`onRefresh`；`data-project-selector`／`data-project-id` 供測試 |
+| `src/pages/DataExplorerPage.jsx` | 專案清單載入＋刷新、`handleProjectChange`（發佈＋顯示版本活動）、`viewTables = 本頁檔 → 共享 → 專案版本` |
+| `src/pages/GanttPage.jsx` | mirror effect 新增「Explorer 選了專案」分支（`localApi.getProject` → `handleProjectLoaded`）；effect 移到 `handleProjectLoaded` 之後 |
+| `scripts/smoke-test.mjs` | 批次 50 回歸測試（helpers／選擇器 render＋空狀態＋後端提示＋palette／雙頁接線守門） |
+
+### 驗證（TDD：先 RED 再 GREEN）
+1. **RED**：先寫測試 → `Project selector + project sync (batch 50): FAILED: Error: Failed to load url /src/lib/projectOptions.js … Does the file exist?` ✓
+2. 首次 GREEN 執行抓到**既有迴歸**：`GanttPage (full page render): FAILED: ReferenceError: Cannot access 'handleProjectLoaded' before initialization`（依賴陣列 TDZ）→ 把 effect 移到 `handleProjectLoaded` 之後 ✓
+3. **GREEN**：`OK (projects listed + summarised, stored version rendered as a TASK table, selector renders/selects/empty-state/backend hint with palette tokens, both pages wired)`；總計 **95 OK / 0 FAILED**（94 + 新增 1）、`eslint` exit 0、`vite build` exit 0
+4. 模組健康：`/data-explorer`、`projectOptions.js`、`ProjectSelector.jsx`、`DataExplorerPage.jsx`、`/` 全部 HTTP 200
+
+**RTM（批次 50）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-5001 | Explorer 專案選擇器（後端清單／刷新／後端未啟動提示） | `ProjectSelector` ＋ `localApi.listProjects` | Planner wants to switch project in both pages | Verified |
+| FR-5002 | 切換即發佈並清空舊共享表 | DataExplorerPage `handleProjectChange` | No stale data | Verified |
+| FR-5003 | 版本活動呈現為 TASK 表 | `storedVersionTables` | Browsable stored project | Verified |
+| FR-5004 | Explorer → Gantt：載入同一專案（ProjectBar 路徑） | GanttPage mirror effect | Bidirectional sync | Verified |
+| FR-5005 | Gantt → Explorer：選擇器同步 | `handleProjectLoaded` 發佈 | Bidirectional sync | Verified |
+| FR-5006 | 檔名優先序（本頁檔 → 共享 → 版本 meta） | DataExplorerPage | Clear provenance | Verified |
+| NFR-5001 | 鏡射 effect 位置（避免 TDZ） | GanttPage | No crash | Verified（smoke 曾抓到並修正） |
+| NFR-5002 | 後端不可用／無版本時優雅降級 | ProjectSelector／storedVersionTables | Robustness | Verified |
+| NFR-5003 | 選擇器 light-only palette | ProjectSelector（palette guard） | Common Look and Feel | Verified |
+| AC-5001 | smoke 95 OK / 0 FAILED、eslint 0、build 0、模組全 200 | 量測（2026-09-22） | Safe project switching | Verified |
+
+---
+
+## 📦 Batch 51 — 修正：在 Gantt 選了「儲存的專案」後，Data Explorer 沒有資料
+
+### 使用者回報（2026-09-22）
+> 「我選擇了儲存的『選擇專案』后，進入『Data Explorer』後依然沒有資料顯示。」
+
+### 根因（Root cause）
+- Gantt 的 `handleProjectLoaded()` 發佈共用 programme 時，對**後端專案**而言 `xerTables` 是 `null`（後端版本只存 `{ tasks, meta }`，**沒有原始表**）→ 共用狀態只有 `projectId`／`projectName`，**沒有 `tables`**。
+- Explorer 的顯示來源是 `tables → 共享 tables → 專案版本`；當共享 tables 與 text 都是空的時候，畫面只剩空狀態（拖放區），**沒有任何資料** → 使用者看到「沒有資料」。
+- 附帶問題：專案發佈時沒有清掉上一個檔案遺留的 `text`／重建結果，可能顯示**過期**表格。
+
+### 修正
+| 檔案 | 變更 |
+|---|---|
+| `src/pages/DataExplorerPage.jsx` | 新增 **adopt effect**（`adoptedProjectRef` 去重）：當共用狀態有 `projectId` 但沒有 `tables`／`text` 時，Explorer 自己 `localApi.getProject(id)` → `storedVersionTables()` 把該版本的活動呈現為 `TASK` 表 → 設定檔名（版本 `meta.source_filename`）與錯誤提示；切專案／重建時 `setRebuilt(null)` 避免殘留舊檔表格。新增**專案專屬空狀態**（`data-empty-project`）：說明「此專案尚無儲存版本可顯示」＋提示可在 Gantt 存檔或改上傳檔案。 |
+| `src/pages/GanttPage.jsx` | `handleProjectLoaded()` 的發佈補上 `text: ""`，確保切換到後端專案時不會殘留上一份檔案的文字／重建表格。 |
+| `scripts/smoke-test.mjs` | 批次 51 回歸測試：以共用狀態「只有 projectId、沒有 tables／text」渲染 Explorer → 必須出現 `data-project-id`、專案名稱、`data-empty-project` 與「stored version」說明；並以原始碼守門檢查 adopt effect 與 `text: ""`。 |
+
+### 驗證（TDD：先 RED 再 GREEN）
+1. **RED**：`Stored project shows data in the Explorer (batch 51): FAILED (rendered=false, wiring=false)` ✓
+2. **GREEN**：`OK (the shared project is fetched by the Explorer and rendered as its stored activities; the empty state explains itself; a project publish clears the previous file's text)`；總計 **96 OK / 0 FAILED**（95 + 新增 1）、`eslint` exit 0、`vite build` exit 0
+3. **真實後端端對端**：`GET /projects` → 1 個專案 `6WSD21-DP_202409`；`GET /projects/{id}` → latest version「Save 22/09/2026, 13:49:13」含 **886 個活動**（+191 分段）→ 修正後 Explorer 會把這 886 筆顯示成 `TASK` 表 ✓
+
+### 已知界限
+後端版本**不含原始表**（僅 `tasks`＋`meta`），因此切換到後端專案時 Explorer 顯示的是「該版本活動」的 `TASK` 表，而非檔案的全部原始表（PROJECT／TASKPRED／RSRC…）。要瀏覽完整原始表需載入 XER／P6 XML（或先在 Gantt 上傳，兩頁共用）。
+
+**RTM（批次 51）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-5101 | Explorer 在共用狀態只有 projectId 時自行抓取該版本並顯示活動 | DataExplorerPage adopt effect | 使用者回報「沒有資料」 | Fixed |
+| FR-5102 | 切換到後端專案時清除舊檔 `text`／重建表格 | GanttPage `handleProjectLoaded`／DataExplorerPage | 避免顯示過期資料 | Fixed |
+| FR-5103 | 專案無儲存版本時顯示可理解的空狀態 | `data-empty-project` | 不讓畫面變成「空白」 | Fixed |
+| AC-5101 | smoke 96 OK / 0 FAILED、eslint 0、build 0；後端實測 886 活動可顯示 | 量測（2026-09-22） | 問題已解 | Verified |
+
+---
+
+## 📦 Batch 52 — 修正：Explorer 仍空白 ＆ 回 Gantt 被重置
+
+### 使用者回報（2026-09-22）
+> 「還是不行，我啓動了專案 6WSD21-DP_202409 在 Gantt 后，轉到 data-explorer 裏還是空白的，而再回到 Gantt 那邊，也被切回到了初始首頁。」
+
+### 根因（兩個獨立缺口）
+1. **Explorer 空白**：共用狀態裡的 `projectId` 只有在**批次 49/50 之後**選專案才會被發佈。若專案是在此之前選的（或該次 session 的共用狀態沒有 `projectId`），Explorer 沒有任何可抓取的目標——批次 51 的 adopt effect 以 `projectId` 為前提，因此仍然空白。
+2. **回 Gantt 被重置**：Gantt 的 programme 是**元件內 state**，切換路由會 unmount → 狀態消失；而 mirror effect 開頭即要求 `source === "explorer"`，**不會還原 Gantt 自己**發佈的專案 → 回到 Gantt 就落回 `DEFAULT_TASKS`（「初始首頁」）。
+
+### 修正
+| 檔案 | 變更 |
+|---|---|
+| `src/lib/projectOptions.js` | 新增 `newestProject(projects)`：取「最新儲存版本」的專案（`latest_version.created_at` 排序，無版本者以名稱排序殿後；空清單回 `null`）。 |
+| `src/pages/DataExplorerPage.jsx` | adopt effect 改為 `targetId = programme?.projectId \|\| newestProject(projects)?.id`：**沒有 projectId 時自動採用後端最新專案**（因此只要後端有 programme，Explorer 不會空白），並把該選擇**發佈**（`source:"explorer"`）讓 Gantt 跟進；仍保留「真實檔案的 tables／text 優先」兩道守衛。 |
+| `src/pages/GanttPage.jsx` | mirror effect 改為：先做 **還原共用專案**（`sharedProgramme.projectId !== currentProjectId` → `localApi.getProject` → `handleProjectLoaded`，**不分來源**），之後才套用「只鏡射 Explorer 載入的檔案（`source === "explorer"`）」的分支。 |
+| `scripts/smoke-test.mjs` | 批次 52 回歸測試：`newestProject` 純函式契約、Explorer 的 `targetId = projectId \|\| newestProject(projects)` ＋發佈、以及 Gantt 的**專案還原分支必須早於** `source !== "explorer"` 守門（以索引比較，避免只是「有字」的假通過）。 |
+
+### 驗證（TDD：先 RED 再 GREEN）
+1. **RED**：批次 52 檢查 FAILED（helpers 與接線都還不存在）✓
+2. **GREEN**：**97 OK / 0 FAILED**（96 + 新增 1）、`eslint` 0 問題、`vite build` exit 0 ✓
+3. **真實後端模擬（用真正的 `projectOptions.js` ＋ 本地 FastAPI）**：
+```
+projects in backend : 6WSD21-DP_202409
+auto-adopted project: 6WSD21-DP_202409
+latest version      : Save 22/09/2026, 13:49:13 (886 activities)
+Explorer TASK rows  : 886
+first row           : {"task_code":"WSD-CD-01","task_name":"6WSD21 Contract Date","act_start_date":"2021-11-10","phys_complete_pct":"100"}
+```
+→ 即使共用狀態沒有 `projectId`，Explorer 也會顯示 886 筆活動；回 Gantt 亦會還原同一專案 ✓
+
+**RTM（批次 52）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-5201 | 共用狀態無 projectId 時自動採用後端最新專案 | `newestProject` ＋ DataExplorerPage adopt effect | 使用者回報 Explorer 空白 | Fixed |
+| FR-5202 | 自動採用後發佈該專案（兩頁一致） | `publishProgramme(..., "explorer")` | 兩邊同步 | Fixed |
+| FR-5203 | Gantt 重掛載時還原共用專案（不分來源） | GanttPage mirror effect 順序調整 | 使用者回報回 Gantt 被重置 | Fixed |
+| AC-5201 | smoke 97 OK / 0 FAILED、eslint 0、build 0；真實後端模擬 886 筆可顯示 | 量測（2026-09-22） | 兩個症狀皆已解 | Verified |
+
+---
+
+## 📦 Batch 53 — 後端版本也存原始表（切專案即可看 PROJECT／TASKPRED／RSRC 全部原始表）
+
+### 使用者需求（2026-09-22）
+> 「後端版本也要存原始表（切專案也能看 PROJECT／TASKPRED／RSRC 全部原始表）」
+
+### User Story
+As a **planner**, I want **every stored version to keep the file's own raw tables**, so that **opening a stored project in the Data Explorer shows the same tables as the original XER, not just the parsed activities**.
+
+### Requirements
+- **Functional**
+  - FR-5301：**儲存時帶上原始表**——ProjectBar 上傳（`parseFileInBrowser` 的 `xerTables`）與存檔（新增 `xerTables` prop，由 GanttPage 傳入 `xerSource`）都把 `payload.xerTables` 寫進版本。
+  - FR-5302：**大小守衛**——`tablesWithinLimit()`（預設 24 MB JSON，約 40 MB 的 XER）超限就只存活動，不讓 payload 爆掉。
+  - FR-5303：**載入時恢復**——`handleProjectLoaded()` 讀 `payload.xerTables`（優先於匯入時的 tables）→ 設定 `xerSource`（後端專案也能 XER→XER 無損輸出）→ 並把 `tables`／`format` 發佈到共用狀態。
+  - FR-5304：**Explorer 優先顯示原始表**——`explorerTableSource(project)` 回 `{ tables, source }`：`"raw"`（版本存了原始表）→ 否則 `"activities"`（由活動重建的 TASK 表）→ 否則 `null`；畫面上以 `data-table-source` 標示來源，舊版本顯示「predates raw-table storage…」提示。
+  - FR-5305：`versionSummary()` 增加 `hasRawTables`／`tableCount`（供 UI 與測試判斷）。
+- **Non-Functional**
+  - NFR-5301：**後端零改動**——`POST /projects/{id}/versions` 已原樣保存任意 `payload` dict；`GET /versions`（清單）不回傳 payload，因此清單不會變胖。
+  - NFR-5302：既有（無原始表的）版本必須**繼續可用**：Explorer 退回活動檢視並說明原因。
+- **Constraints**：只改前端 `projectOptions.js`／`ProjectBar.jsx`／`GanttPage.jsx`／`DataExplorerPage.jsx`；不動後端 API 與資料庫 schema。
+
+### 實作
+| 檔案 | 內容 |
+|---|---|
+| `src/lib/projectOptions.js` | 新增 `MAX_STORED_TABLES_CHARS`、`tablesJsonSize`、`tablesWithinLimit`、`versionRawTables`、`explorerTableSource`；`versionSummary` 加 `hasRawTables`／`tableCount` |
+| `src/components/gantt/ProjectBar.jsx` | 新增 `xerTables` prop；上傳與存檔的 payload 皆帶 `...(xerTables && tablesWithinLimit(xerTables) ? { xerTables } : {})` |
+| `src/pages/GanttPage.jsx` | `handleProjectLoaded` 讀 `payload?.xerTables`（`storedTables`；`sourceTables` 決定 `xerSource`／recalc 來源）；發佈 `tables: storedTables \|\| xerTables \|\| null` 與對應 `format`；`<ProjectBar xerTables={xerSource} …>` |
+| `src/pages/DataExplorerPage.jsx` | 改用 `explorerTableSource()`；新增 `projectSource` 狀態；標題列下方以 `data-table-source` 顯示來源說明；載入檔案／Clear 時清除來源 |
+| `scripts/smoke-test.mjs` | 批次 53 回歸測試（大小守衛、`versionRawTables`、`explorerTableSource` 三態、`versionSummary` 新欄位、四檔接線守門） |
+
+### 驗證（TDD：先 RED 再 GREEN）
+1. **RED**：`Stored versions carry the raw tables (batch 53): FAILED: TypeError: lib.tablesJsonSize is not a function` ✓
+2. **GREEN**：**98 OK / 0 FAILED**（97 + 新增 1）、`eslint` 0 問題、`vite build` exit 0 ✓
+   （過程中兩個舊斷言因重構改為意圖層級：`storedVersionTables` → `explorerTableSource`）
+3. **後端來回實測（臨時專案，測完刪除）**：
+```
+created temp project : smoke-rawtables-1790058189185
+stored version       : round trip  (payload chars 194)
+raw tables returned  : PROJECT, TASKPRED, RSRC  identical=true
+Explorer will show   : source="raw", 3 tables, 1 TASKPRED row(s), hasRawTables=true
+cleanup              : temp project deleted, projects now = 6WSD21-DP_202409
+```
+→ 原始表經後端保存後**完全一致**取回，且 Explorer 會走 `raw` 路徑 ✓
+
+### 使用注意
+既有版本（例如使用者的 `6WSD21-DP_202409` 於 2026-09-22 13:49 存的那版）是在本批次**之前**存的，**沒有原始表** → Explorer 會顯示活動檢視並提示「predates raw-table storage」。**在 Gantt 頁重新上傳該 XER（或按存檔）一次**，之後該版本就帶著全部原始表 ✓
+
+**RTM（批次 53）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-5301 | 上傳／存檔時把原始表寫入版本 payload | ProjectBar（`xerTables` prop） | 想在 Explorer 看全部原始表 | Verified |
+| FR-5302 | 24 MB 大小守衛（超限只存活動） | `tablesWithinLimit` | 避免 payload 爆掉 | Verified |
+| FR-5303 | 載入版本時恢復 `xerSource` 並發佈 tables | GanttPage `handleProjectLoaded` | 無損 XER→XER、兩頁一致 | Verified |
+| FR-5304 | Explorer 優先原始表，否則活動並標示來源 | `explorerTableSource` ＋ `data-table-source` | 誠實呈現資料來源 | Verified |
+| FR-5305 | `hasRawTables`／`tableCount` 摘要 | `versionSummary` | UI／測試判斷 | Verified |
+| NFR-5301 | 後端零改動、清單不回傳 payload | FastAPI versions router | 不改基礎設施 | Verified |
+| NFR-5302 | 舊版本仍可用（活動檢視＋說明） | `explorerTableSource` `"activities"` | 向後相容 | Verified |
+| AC-5301 | smoke 98 OK / 0 FAILED、eslint 0、build 0；後端來回 identical=true | 量測（2026-09-22） | 功能可用 | Verified |
+
+---
+
+## 📦 Batch 54 — 兩頁真正共用同一份 programme ＋ Explorer 可選版本
+
+### 使用者需求（2026-09-22）
+> 「兩邊頁面應該共享同一套數據，而不是跳換兩邊畫面后就刷新掉數據，Explorer 也要能選版本（目前只選專案，挑最新版）」
+
+### User Story
+As a **planner**, I want **both pages to keep showing the same programme when I swap between them, and to pick which stored version the Data Explorer opens**, so that **I never lose the loaded programme or have to re-upload it**.
+
+### Requirements
+- **Functional**
+  - FR-5401：共用狀態新增 `tasks`（記憶體）／`versionId`／`versionName`（後兩者持久化）——兩頁的**同一份 programme**。
+  - FR-5402：Gantt 每次 tasks 變動（參照比較、防迴圈）即 `publishProgramme({ tasks }, "gantt")`，因此切換路由或重新掛載都不會掉資料。
+  - FR-5403：Gantt 重新掛載時的還原優先序：**(1) 共用 versionId → `getVersion` 載入該版本** → (2) 共用 projectId 不同 → `getProject` → (3) 共用 tasks（不同參照）→ 直接還原 tasks／tables／標題 → (4) Explorer 載入的檔案（tables／text）。以 `appliedVersionRef`＋`mirroredRevision` 防迴圈。
+  - FR-5404：Explorer 新增**版本選擇器**（`VersionSelector`）：`localApi.listVersions()`（**最新在前**，標籤含名稱／時間／活動數）→ 選版本時 `getVersion()` 取該版本 payload → `explorerTableSource()` 顯示原始表或活動，並發佈 `versionId`／`versionName`。
+  - FR-5405：`pickVersionTarget({ project, versions, wantedId })` 決定要開哪一版：共用版本（屬於此專案）→ 最新版本 → 專案的 `latest_version` → 無。
+  - FR-5406：helpers 同時接受「專案（含 `latest_version`）」或「版本物件」本身（`asVersion()`），因此專案與版本兩條路徑共用同一套判斷。
+  - FR-5407：切專案時同時載入該專案的版本清單；`versionSummary` 只依 payload 判斷，不需額外請求。
+- **Non-Functional**
+  - NFR-5401：tasks 只留記憶體（不寫 localStorage，避免 quota 與序列化成本）。
+  - NFR-5402：版本清單 API（`GET /versions`）不回傳 payload，清單不會因原始表而變胖。
+  - NFR-5403：選擇器沿用 Common Look and Feel palette（測試含 palette guard）。
+- **Constraints**：不改後端；只動 `programmeStore.jsx`／`projectOptions.js`／`DataExplorerPage.jsx`／`GanttPage.jsx`，並新增 `VersionSelector.jsx`。
+
+### 實作
+| 檔案 | 內容 |
+|---|---|
+| `src/lib/programmeStore.jsx` | `emptyProgramme()` 加 `tasks`／`versionId`／`versionName`；持久化只寫 versionId／versionName |
+| `src/lib/projectOptions.js` | 新增 `asVersion`（內部）、`versionOptions`（最新在前）、`newestVersion`、`pickVersionTarget`；`versionSummary`／`storedVersionTables`／`versionRawTables` 改走 `asVersion` |
+| `src/components/dataexplorer/VersionSelector.jsx`（新） | 純呈現版本選單（`data-version-selector`／`data-version-id`），含刷新與空狀態 |
+| `src/pages/DataExplorerPage.jsx` | 以 `applyVersion(projectId, versionId)` 統一「取專案＋版本＋tables」流程；新增 `versions`／`versionId` 狀態、`handleVersionChange`、版本選擇器；改為呼叫 `explorerTableSource` 判斷來源 |
+| `src/pages/GanttPage.jsx` | mirror effect 加入 (1) 版本還原（`getVersion`＋`appliedVersionRef`）與 (3) tasks 還原；新增 tasks 發佈 effect |
+| `scripts/smoke-test.mjs` | 批次 54 回歸測試（version options 最新在前、`newestVersion`、`pickVersionTarget` 四情境、store 新欄位、`VersionSelector` render 與選取、兩頁接線守門） |
+
+### 驗證（TDD：先 RED 再 GREEN）
+1. **RED**：`Shared programme + version picking (batch 54): FAILED: TypeError: lib.versionOptions is not a function` ✓
+2. **GREEN**：**99 OK / 0 FAILED**（98 + 新增 1）、`eslint` 0 問題、`vite build` exit 0、模組（`/data-explorer`、`VersionSelector.jsx`、`DataExplorerPage.jsx`、`projectOptions.js`、`GanttPage.jsx`）全 200 ✓
+3. **真實後端檢查**：`6WSD21-DP_202409` 現有 **1 個版本**（`Save 22/09/2026, 14:18:47`，886 活動；清單不含 payload）→ 以真實 helper 判定 `hasRawTables=false`、`source="activities"`（顯示 886 筆活動表）✓
+
+**RTM（批次 54）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-5401 | 共用狀態含 tasks／versionId／versionName | `programmeStore.jsx` | 兩頁共享同一套數據 | Verified |
+| FR-5402 | tasks 變動即發佈（防迴圈） | GanttPage tasks effect | 跳換頁面不掉資料 | Verified |
+| FR-5403 | Gantt 還原優先序（版本 → 專案 → tasks → Explorer 檔案） | GanttPage mirror effect | 同上 | Verified |
+| FR-5404 | Explorer 版本選擇器（最新在前） | `VersionSelector` ＋ `applyVersion` | Explorer 要能選版本 | Verified |
+| FR-5405 | `pickVersionTarget` 決策（共用版本／最新／latest_version） | `projectOptions.js` | 選版本行為明確 | Verified |
+| FR-5406 | helpers 同時接受專案或版本 | `asVersion` | 兩條路徑共用 | Verified |
+| FR-5407 | 切專案同時載入版本清單 | `listVersions` | 版本可選 | Verified |
+| NFR-5401 | tasks 不落地（記憶體） | `writePersistedProgramme` | 效能／quota | Verified |
+| NFR-5402 | 版本清單不含 payload | FastAPI `to_dict()` | 清單不會變胖 | Verified |
+| NFR-5403 | 選擇器 light-only palette | `VersionSelector`（palette guard） | Common Look and Feel | Verified |
+| AC-5401 | smoke 99 OK / 0 FAILED、eslint 0、build 0、模組全 200 | 量測（2026-09-22） | 功能可用 | Verified |
+
+
+---
+
+## 📦 Batch 54b — 修正「切換頁面時畫面閃現」
+
+### 使用者回報（2026-09-22）
+> 「爲什麽會閃現畫面」
+
+### 根因
+1. **首繪閃現**：Gantt 的 `tasks`／`currentProjectId`／`projectTitle`／`xerSource` 都用「預設值」初始化，掛載後才由還原 effect 換成共用 programme → 使用者會先看到**預設 programme**（`DEFAULT_TASKS`）再跳成真實資料（含標題／專案列）。
+2. **多餘重繪**：tasks 每次變動都立即發佈（拖曳、儲存格、undo…）→ 共用 context 變更 → Gantt（與 Explorer）每次都整體重繪。
+3. **表格來源跳動**：Explorer 的 `viewTables` 以「共享 tables 優先於專案/版本 tables」→ 兩者都存在時會在「原始表」與「活動表」之間來回跳。
+
+### 修正
+| 檔案 | 變更 |
+|---|---|
+| `src/pages/GanttPage.jsx` | 把 `useProgramme()` 提到元件**最前面**，並讓 `tasks`／`history`／`nextId`／`projectTitle`／`currentProjectId`／`xerSource` 的 `useState` 初始值**優先採用共用 programme** → 首繪就是正確資料；tasks 發佈改為 **800 ms debounce**（`setTimeout` + cleanup）。 |
+| `src/pages/DataExplorerPage.jsx` | 新增 `seenRevisionRef`：偵測到**新的**共享 programme（revision 變更且非首次）時，清掉先前載入的專案/版本 tables（`setProjectTables(null)`／`setProjectSource(null)`）→ 表格來源單一化；`viewTables` 優先序改為 `本頁檔 → 專案/版本 → 共享`。 |
+
+### 驗證（TDD：先 RED 再 GREEN）
+1. **RED**：新增批次 54b 檢查 → `No-flicker first paint + debounced publish (batch 54b): FAILED (noFlash=false)` ✓（其餘 99 OK）
+2. **GREEN**：**100 OK / 0 FAILED**（99 + 新增 1）、`eslint` 0 問題、`vite build` exit 0 ✓
+3. 模組：`/data-explorer`、`DataExplorerPage.jsx`、`GanttPage.jsx` 等全部 HTTP 200 ✓
+
+**RTM（批次 54b）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-5408 | Gantt 首繪即採用共用 programme（不再先畫預設） | GanttPage state initialisers | 使用者回報畫面閃現 | Fixed |
+| FR-5409 | tasks 發佈 debounce 800ms（降低重繪） | GanttPage tasks effect | 同上 | Fixed |
+| FR-5410 | Explorer 表格來源單一化（新共享 programme 取代舊專案/版本 tables） | `seenRevisionRef`＋`viewTables` 優先序 | 同上 | Fixed |
+| AC-5402 | smoke 100 OK / 0 FAILED、eslint 0、build 0 | 量測（2026-09-22） | 症狀已解 | Verified |
+
+---
+
+## 🔤 批次 55（2026-09-22）— 資料表出現亂碼 `�G` / `�D` / `��`：根因是**來源 XER 檔本身已損毀**
+
+### 使用者提問
+「Data Explorer 的表格為什麼會有亂碼？能幫我檢查修正一下可能的問題嗎？」
+（截圖：`CURRTYPE` 表 `curr_symbol` 欄分別顯示 `�G`、`�D`、`��`）
+
+### 追查（以真實檔案逐位元組驗證，非推測）
+使用者實際匯入的檔案：`C:\Users\ken.li\Downloads\6WSD21-DP_202409.xer`（617.9 KB）
+
+| 驗證項目 | 方法 | 結果 |
+|---|---|---|
+| 檔案是否為合法 UTF-8 | `new TextDecoder("utf-8",{fatal:true}).decode(buf)` | ✅ 通過（**檔案本身是合法 UTF-8**） |
+| 全檔 U+FFFD 數量 | `buf.toString("utf8").match(/\uFFFD/g).length` | **5**（僅 5 個字元損毀，其餘 886 個活動完全乾淨） |
+| `curr_symbol` 原始位元組 | 由 `%F` / `%R` 取欄位、逐 byte 轉 hex | `ef bf bd 47`（GBP）／`ef bf bd 44`（JPY）／`ef bf bd ef bf bd`（EUR） |
+| `ef bf bd` 是什麼 | UTF-8 解碼 | 就是 **U+FFFD 本身的 UTF-8 編碼** |
+
+### 根因（結論）
+`ef bf bd` **已經寫在檔案裡**：原始貨幣符號（單一位元組，如 `£` = `0xA3`、`¥` = `0xA5`、`€` = `0x80`）
+在 P6 匯出時被當成 UTF-8 解碼 → 產生 U+FFFD → 再以 UTF-8 寫回檔案（`ef bf bd`），
+而後面的 ASCII 尾位元組（`G`、`D`）原樣保留。
+
+```
+原始位元組：      0xA3 0x47
+匯出管線以 UTF-8：0xA3 無效 → U+FFFD ；0x47 = "G" 保留
+寫回檔案：        ef bf bd 47     → 讀入後顯示 "�G"     ← 檔案內就是這個內容
+```
+
+因此：**這不是本應用的解碼錯誤，而是來源檔案在匯出階段就已遺失資料**。
+本應用忠實顯示檔案內容（沒有改寫、沒有猜測），所以看到的就是 `�G`；同一份檔案用任何工具開啟都會一樣。
+
+### 修正（做了什麼、刻意不做什麼）
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | 新增 `brokenValues(tables)`：掃描所有資料表，統計並取樣含 U+FFFD 的值（最多 5 筆樣本） | `src/lib/dataExplorer.js` |
+| 2 | 有損毀值時顯示提示條（`data-broken-values`，hover 列出 `表.欄 = 值` 樣本）：說明檔案本身含無法還原的字元、請由 P6 重新匯出 | `src/pages/DataExplorerPage.jsx` |
+| 3 | **刻意不做**「自動修補」：遺失的位元組無從得知（`0xA3` 只是推測），猜測等於**捏造資料**，違反本專案「不臆測、忠實呈現」原則 | — |
+| 4 | 迴歸測試：U+FFFD 值必須被計數與取樣、空／null 輸入安全、頁面必須有提示條與 `data-broken-values` | `scripts/smoke-test.mjs` |
+
+### 建議（使用者端）
+1. **在 P6 端修正貨幣符號後重新匯出 XER**（最乾淨的解法）。
+2. 若只需辨識貨幣：`curr_short_name` 欄（USD／GBP／JPY／EUR／CNY）完全正常，可依它判斷；損毀的只有裝飾性的 `curr_symbol`。
+3. 本檔案其餘 15 個資料表、886 個活動、關係、日曆等**完全正常**，可放心使用。
+
+### 驗證（TDD：先 RED 再 GREEN）
+1. **RED**：新增批次 55 檢查 → `Broken file characters are surfaced (batch 55): FAILED: TypeError: lib.brokenValues is not a function` ✓（其餘 100 OK）
+2. **GREEN**：**101 OK / 0 FAILED**（100 + 新增 1）、`eslint` 0 error、`vite build` exit 0 ✓
+3. 檔案層級驗證：`strict utf-8 = OK`、全檔僅 5 個 U+FFFD、偵測出的樣本與畫面顯示一致 ✓
+
+**RTM（批次 55）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-5501 | 載入檔案含無法解碼字元（U+FFFD）時，介面必須明確告知使用者 | `brokenValues()` ＋ Explorer 提示條 | 使用者回報資料表出現亂碼 | Complete |
+| FR-5502 | 應用不得「修補」或猜測遺失字元（維持忠實呈現） | 設計決策（無自動修補） | 使用者要求查出原因 | Complete |
+| NFR-5501 | 損毀偵測須為 O(資料量) 且對空／`null` 輸入安全 | `brokenValues()` | 使用者要求效能無感 | Verified |
+| AC-5501 | 真實 XER（`6WSD21-DP_202409.xer`）：檔案本身為合法 UTF-8、全檔僅 5 個 U+FFFD、`curr_symbol` 位元組為 `ef bf bd 47`／`ef bf bd 44`／`ef bf bd ef bf bd` | 位元組層級量測（2026-09-22） | 亂碼根因確認 | Verified |
+| AC-5502 | 煙霧測試 101 OK / 0 FAILED（含批次 55 斷言） | `scripts/smoke-test.mjs` | — | Verified |
+
+---
+
+## 💱 批次 56（2026-09-22）— 貨幣符號還原：以未損毀的 ISO 代碼補回 `£` `¥` `€`
+
+### 使用者需求
+「幫我重塑增加相關字符，以保證能夠正確顯示所有貨幣符號」
+
+### 追查（兩顆真實檔案逐位元組比對）
+| 檔案 | GBP | JPY | EUR | CNY |
+|---|---|---|---|---|
+| `6WSD21-DP_202403.xer`（舊，2024-04） | bytes `A2 47` → 顯示 `¢G` | `A2 44` → `¢D` | `A3 E1` → `£á` | `A2 44` → `¢D` |
+| `6WSD21-DP_202409.xer`（新，2026-09 匯入） | `ef bf bd 47` → `�G` | `ef bf bd 44` → `�D` | `ef bf bd ef bf bd` → `��` | `ef bf bd 44` → `�D` |
+
+兩顆檔案的**尾位元組完全相同**（GBP `47` = `G`、JPY／CNY `44` = `D`）→ 新檔就是同一批位元組被 UTF-8 重編碼（每個非 ASCII byte → U+FFFD），損毀確實發生在**匯出來源**（批次 55 已證實）。
+
+**關鍵事實**：18 個貨幣中**只有 4 個非 ASCII 符號壞掉**（GBP `£`、JPY `¥`、CNY `¥`、EUR `€`），
+其餘 ASCII 符號（`$` `R$` `$b` `Gs` `S/.` `Bs` `RUB` `$U`）全部完好；`curr_short_name`（ISO 4217）也全部完好
+→ 這是可靠、**非臆測**的還原依據。
+
+### 修正
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | 新增 `currencySymbols.js`：`CURRENCY_SYMBOLS`（ISO 4217 → 符號，約 90 種）、`currencySymbolFor()`、`currencyCodeOf()`、`isBrokenValue()`、`restoreCurrencySymbols()` | `src/lib/currencySymbols.js`（新） |
+| 2 | Explorer 以**還原後**的表渲染與匯出（Excel 也拿到正確符號），原始表永不改寫 | `src/pages/DataExplorerPage.jsx` |
+| 3 | 還原提示條（`data-restored-symbols`，hover 顯示 `表.欄: GBP → £ (the file had "�G")`） | 同上 |
+| 4 | 儲存格／屬性卡以 `*` 標示還原值，hover 顯示原檔內容 | `src/components/dataexplorer/TableBrowser.jsx` |
+| 5 | 迴歸測試：4 個符號還原、完好值不得被動、輸入不得被改、無法還原者列入 `unresolved`、真實 18 列還原後零 U+FFFD | `scripts/smoke-test.mjs` |
+
+### 還原規則（刻意保守，避免臆測）
+1. 只有**含 U+FFFD** 的值會被取代；
+2. 只處理**符號欄位**（`curr_symbol`／P6 XML 的 `CurrencySymbol`）；
+3. 只有列上帶**已知 ISO 代碼**時才還原，否則原值保留並列入 `unresolved`（例如 `XXX`、非貨幣列）；
+4. 輸入物件**不被修改**（回傳新物件；未變更時回傳原物件，memo 友善）；
+5. ASCII 符號永不變動（`R$`、`Bs`、`S/.` 等保留 P6 原樣，不強改成標準符號）。
+
+### 驗證（TDD：先 RED 再 GREEN）
+1. **RED**：`Currency symbols restored from the ISO code (batch 56): FAILED: Error: Failed to load url /src/lib/currencySymbols.js … Does the file exist?`（其餘 101 OK）
+2. **GREEN**：**102 OK / 0 FAILED**、`eslint` 0 error、`vite build` exit 0；真實檔還原後 `brokenValues().count === 0` ✓
+3. 過程中測試自身有一個自相矛盾的斷言（拿已損毀列去比對還原後的值）→ 已修正為「只檢查本來完好的列」✓
+4. 批次 54b 的接線斷言原本綁在 `const viewTables = tables \|\| projectTables \|\| sharedTables;` 這一行字面上；
+   由於 `viewTables` 現在代表**還原後**的表，改為 `rawTables`（同一條優先序）＋新增 `const { tables: viewTables` 斷言
+   → 行為不變、守門更完整 ✓
+
+**RTM（批次 56）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-5601 | 匯出損毀的貨幣符號必須以列上的 ISO 4217 代碼還原並正確顯示 | `restoreCurrencySymbols()` ＋ Explorer | 使用者要求「保證正確顯示所有貨幣符號」 | Complete |
+| FR-5602 | 本來完好的符號不得被改寫（保留 P6 原始慣例，如 `R$`、`Bs`、`S/.`） | 同上（只處理含 U+FFFD 的值） | 使用者要求忠實呈現 | Complete |
+| FR-5603 | 無 ISO 代碼可依據的損毀值必須原樣顯示並列入 `unresolved` 回報 | `restoreCurrencySymbols()` ＋ 提示條 | 使用者要求可追溯 | Complete |
+| NFR-5601 | 還原須為純函式（不得修改輸入），未變更時回傳原物件 | `restoreCurrencySymbols()` | — | Verified |
+| NFR-5602 | 符號表須涵蓋主要 ISO 4217 貨幣（約 90 種）；未知代碼回傳空字串而非臆造符號 | `CURRENCY_SYMBOLS` | 使用者要求「所有貨幣符號」 | Complete |
+| AC-5601 | 真實檔 18 列：4 列還原為 `£`／`¥`／`€`／`¥`，14 列維持原值，還原後 U+FFFD 值為 0 | smoke test fixture（真實值） | — | Verified |
+| AC-5602 | 煙霧測試 102 OK / 0 FAILED、eslint 0 error、build exit 0 | 量測（2026-09-22） | — | Verified |
+
+---
+
+## 💾 批次 57（2026-09-22）— 存專案時保存「全部資料」：兩邊頁面互跳與日後重開都完整
+
+### 使用者需求
+「存儲專案的功能裏，應該儲存所有資料，包括轉到 data-explorer 那邊顯示的資料也一并儲存，
+保證兩邊頁面跳轉時，或者之後啓動已存儲的專案都能在兩邊頁面完整展示」
+
+### 盤點：原本少了什麼
+| 項目 | 批次 57 之前的狀態 |
+|---|---|
+| 活動 `tasks`（含 `links` 關聯） | ✅ 有存 |
+| 版本資訊 `meta`（來源檔名／格式／Last Recalc Date） | ✅ 有存 |
+| 原始表 `xerTables`（Explorer 顯示用） | ✅ 批次 53 起有存，但**受限於 24 MB 守衛**：超限就只存活動 |
+| **檔案原文 `xerText`** | ❌ **完全沒存** → 原始表一旦被守衛擋掉，Explorer 只能退回「活動表」，Gantt 也失去 `xerSource`（無法 XER→XER 無損輸出） |
+| 開啟已存專案後的共用狀態 `text` | ❌ 被清成 `""`（批次 51 的防殘留設計）→ 無法由原文重建 |
+
+### 量測（真實檔 `6WSD21-DP_202409.xer`）
+```
+檔案原文        :  618 KB（632,682 chars）
+解析後表 JSON   : 2153 KB（15 tables）
+比例            : 3.48x
+```
+→ **存原文最省，而且原文是真相來源**（有原文就能重建任何表）。
+策略：**原始表與原文都存** —— 表提供快速路徑，原文作為保底。
+
+### 修正
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | 新增 `versionRawText(project)`、`MAX_STORED_TEXT_CHARS`、`textWithinLimit()` | `src/lib/projectOptions.js` |
+| 2 | `explorerTableSource()` 新增第 3 態 `"rebuild"`（版本只存原文時回傳 `text` 供呼叫端解析）；`versionSummary()` 加 `hasRawText` | 同上 |
+| 3 | ProjectBar 新增 `xerText` prop；上傳（`parseFileInBrowser` 回傳 `text`）與存檔兩條路徑都以 `textWithinLimit()` 守衛寫入 `payload.xerText` | `src/components/gantt/ProjectBar.jsx` |
+| 4 | Gantt `handleProjectLoaded()` 讀 `payload?.xerText`，沒有 `xerTables` 時**用原文重建**（`parseXerTables`／`tablesFromXml`）→ 設定 `xerSource`，並把 `tables`＋`text` 一起發佈（不再清成 `""`） | `src/pages/GanttPage.jsx` |
+| 5 | Explorer `applyVersion()` 支援 `"rebuild"`（由版本原文重建全部表）、發佈 `tables` 與 `text`；來源提示新增「rebuilt from the file text stored with this version」 | `src/pages/DataExplorerPage.jsx` |
+| 6 | 迴歸測試：原文存取契約／大小守衛／`explorerTableSource` 四態／`hasRawText`／三檔接線守門 | `scripts/smoke-test.mjs` |
+
+### 驗證（TDD：先 RED 再 GREEN）
+1. **RED**：`Stored version keeps every piece of the programme (batch 57): FAILED: TypeError: lib.versionRawText is not a function` ✓
+2. **GREEN**：**103 OK / 0 FAILED**（102 + 新增 1）、`eslint` 0 error、`vite build` exit 0 ✓
+3. **真實後端來回實測**（臨時專案，測後刪除）：
+```
+temp project      : smoke-batch57-1790060534972
+stored version    : tasks=1  tables=15 (2153 KB)  text=618 KB
+stored intact     : text identical=true  tables identical=true
+Explorer source   : raw  15 tables  (currency restored: GBP->£, JPY->¥, EUR->€, CNY->¥)
+summary           : hasRawTables=true hasRawText=true tables=15 file=6WSD21-DP_202409.xer format=xer recalc=2024-09-30
+text-only version : source=rebuild  text identical=true  -> rebuildable
+cleanup           : delete=200  projects now=0
+```
+4. 過程中兩個測試問題已修正並記錄：批次 51／53 的接線斷言綁在舊字面值（`text: ""`、`tables: storedTables`）→ 改為新契約 ✓
+
+**RTM（批次 57）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-5701 | 存檔／上傳時必須把檔案原文（`payload.xerText`）一併寫入版本 | ProjectBar（`xerText` prop ＋ `parseFileInBrowser`） | 使用者要求「儲存所有資料」 | Complete |
+| FR-5702 | 版本未存原始表但存有原文時，Explorer 必須由原文重建全部原始表 | `explorerTableSource` `"rebuild"` ＋ DataExplorerPage | 上述需求 | Complete |
+| FR-5703 | 載入已存專案時 Gantt 必須由 `xerTables` 或原文恢復 `xerSource`，並把 `tables`＋`text` 發佈到共用狀態 | GanttPage `handleProjectLoaded` | 兩邊頁面互跳／重開專案完整展示 | Complete |
+| FR-5704 | 開啟已存版本後不得把 `text` 清空（原文隨版本走，不會殘留上一份檔案） | GanttPage／DataExplorerPage 發佈 | 上述需求 | Complete |
+| NFR-5701 | 原文儲存須有大小守衛（`MAX_STORED_TEXT_CHARS` 24 MB），且表與原文各自獨立判斷 | `textWithinLimit`／`tablesWithinLimit` | 避免 payload 爆掉 | Complete |
+| AC-5701 | 真實 XER：原文 618 KB vs 表 2153 KB（3.48x）→ 原文為最省的真相來源 | 量測（2026-09-22） | 設計決策 | Verified |
+| AC-5702 | 後端來回：`xerTables`／`xerText` 讀回後與寫入**完全相同**；Explorer 得 15 張表；純原文版本可重建 | 臨時專案實測（2026-09-22） | — | Verified |
+| AC-5703 | 煙霧測試 103 OK / 0 FAILED、eslint 0 error、build exit 0 | 量測（2026-09-22） | — | Verified |
+
+---
+
+## 🐞 批次 58（2026-09-22）— 點擊已存專案後「閃退回原始頁」
+
+### 使用者回報
+「爲什麽點擊了儲存的專案后，會閃退回原始頁」
+
+### 根因（讀 effect 得出，可證明）
+`GanttPage.handleProjectLoaded()` 發佈共用 programme 時**沒有帶 `versionId`** ✗，
+所以共用狀態會**保留上一次的 versionId**（例如先前在 Data Explorer 挑過的版本）。
+
+接著 Gantt 的 mirror effect 分支 (1)：
+
+```js
+if (sharedProgramme.projectId && sharedProgramme.versionId
+  && String(sharedProgramme.versionId) !== appliedVersionRef.current) { /* 再載入該版本 */ }
+```
+
+看到「有 projectId ＋ 一個尚未套用的 versionId」→ **又去載入那個舊版本** ✗，
+把你剛點選的專案整個覆蓋回去 → 畫面就是「先顯示正確資料 → 立刻退回原狀」。
+
+次要原因（同一症狀的第二條路徑）：Explorer 的 `applyVersion()` 在 `picked.source === "rebuild"`
+（版本只存原文）而該次重建失敗時，會 `publishProgramme({ tables: null })` ✗ → `viewTables` 變 `null`
+→ **退回空狀態**（也是使用者眼中的「原始頁」）。此外 Explorer 的 revision effect 對「自己發出的發佈」
+也會清掉剛套用的表格來源 ✗（來源標籤消失）。
+
+### 修正
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | `handleProjectLoaded(project, payload, xerTables, version = null)`：發佈 `versionId`／`versionName`，並把 `appliedVersionRef` 記為該版本 | `src/pages/GanttPage.jsx` |
+| 2 | mirror effect 分支 (1) 加上來源守門：**只有 `source === "explorer"`（Explorer 真的挑了版本）才重載版本**；本頁 ProjectBar 的點擊不再被殘留的舊 versionId 反覆載入 | 同上 |
+| 3 | ProjectBar 四個入口都把版本物件傳出去（建立 → `null`、選專案 → `latest_version`、後端匯入 → `result.version`、上傳存檔 → 新建的 `version`） | `src/components/gantt/ProjectBar.jsx` |
+| 4 | `explorerTableSource()` 每個回傳都附帶 `activities` 保底；Explorer 改用 `picked.tables → rebuilt → picked.activities`，**不會因重建失敗而變空** | `src/lib/projectOptions.js`、`src/pages/DataExplorerPage.jsx` |
+| 5 | Explorer revision effect：`programme.source === "explorer"`（自己的發佈）直接略過，不再清掉剛套用的表 | 同上 |
+| 6 | 批次 58 回歸測試（四態保底／四個入口的版本傳遞／來源守門／Explorer 保底與自身發佈略過） | `scripts/smoke-test.mjs` |
+
+### 驗證（TDD：先 RED 再 GREEN）
+1. **RED**：`A stored project click survives a stale version (batch 58): FAILED (fallback=false, click=false, guard=false, explorer=false)` ✓
+2. **GREEN**：**104 OK / 0 FAILED**（103 + 新增 1）、`eslint` 0 error、`vite build` exit 0 ✓
+3. 診斷過程（真實後端，臨時專案測後刪除）：建立含「完整版本 ＋ 純原文版本」的專案，重放 `applyVersion()` 的判定鏈 →
+   確認版本清單端點不回 payload（正常）、最新版本捷徑正常、`explorerTableSource` 對純原文版本回 `rebuild`，
+   並因此查出「重建失敗 → 發佈 `tables: null` → 空狀態」這條路徑 ✓
+
+**RTM（批次 58）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-5801 | 點選專案後不得被共用狀態中殘留的舊 `versionId` 覆蓋（僅 Explorer 真的挑版本才重載） | GanttPage mirror effect (1) ＋ `appliedVersionRef` | 使用者回報點專案後閃退回原始頁 | Fixed |
+| FR-5802 | 載入專案／版本時必須把 `versionId`／`versionName` 寫回共用狀態 | `handleProjectLoaded` ＋ ProjectBar 四入口 | 同上 | Fixed |
+| FR-5803 | 版本內容無法由原文重建時，必須退回該版本的活動清單，不得顯示空狀態 | `explorerTableSource().activities` ＋ DataExplorerPage | 同上 | Fixed |
+| FR-5804 | 頁面自身的發佈不得清除自己剛套用的表格來源 | Explorer revision effect（`source === "explorer"` 略過） | 同上 | Fixed |
+| AC-5801 | 批次 58 斷言紅→綠；煙霧測試 104 OK / 0 FAILED、eslint 0 error、build exit 0 | 量測（2026-09-22） | — | Verified |
+
+---
+
+## 🐞 批次 59（2026-09-22）— 閃退的真正主因：**發佈時沒有帶 `tasks`**，mirror effect 把舊 programme 放回來
+
+### 回報延續
+批次 58 修正「殘留 versionId 被重載」後仍會閃退 → 再往下追，找到兩條**同類型但更致命**的路徑
+（都是「舊資料覆蓋剛載入的專案」）。
+
+### 主因 1（Gantt 頁）— `handleProjectLoaded` 不發佈 `tasks`
+```
+點選專案 → handleProjectLoaded() 設定新的 tasks（畫面正確 ✓）
+        → publishProgramme({ tables, text, projectId … })      ← 沒有 tasks ✗
+        → 共用狀態裡仍是【上一份載入的檔案】的 tasks
+        → mirror effect 因 revision 變更而執行
+        → 分支 (3)：if (sharedProgramme.tasks && sharedProgramme.tasks !== tasks) setTasks(sharedProgramme.tasks)
+        → 剛載入的專案被【舊 programme】覆蓋 → 閃退回原始頁 ✗
+```
+**修正**：`handleProjectLoaded` 把剛套用的 `tasks` 一併發佈（`...(publishTasks ? { tasks: publishTasks } : {})`），
+共用狀態立刻與畫面一致；分支 (3) 再加上 `sharedProgramme.source === "explorer"` 守門，
+**本頁自己的發佈永遠不會把自己覆蓋**。
+
+### 主因 2（Explorer 頁）— 本頁載入的檔案永遠優先
+`viewTables = tables || projectTables || sharedTables` → 若**先在 Explorer 載入過檔案**，
+之後點儲存專案時 `tables`（本頁檔案）仍然優先 → 畫面**回到原本載入的檔案** ✗（＝使用者看到的「退回原始頁」）。
+**修正**：`applyVersion()` 一開始就清掉本頁檔案狀態（`setTables(null)`／`setFileName("")`）——
+選專案＝取代本頁檔案，與 `loadFile()` 反向清除 `projectTables` 對稱。
+
+### 修正
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | 載入專案／版本後，發佈時帶上剛套用的 `tasks` | `src/pages/GanttPage.jsx` |
+| 2 | mirror effect 分支 (3) 只鏡射 **peer page（Explorer）** 的發佈 | 同上 |
+| 3 | Explorer 選專案／版本時清除本頁載入的檔案（`tables`／`fileName`） | `src/pages/DataExplorerPage.jsx` |
+| 4 | 批次 59 回歸測試（tasks 發佈、分支來源守門、選專案清除本頁檔案） | `scripts/smoke-test.mjs` |
+
+### 驗證（TDD：先 RED 再 GREEN）
+1. **RED**：`A fresh project load is never reverted by stale programme data (batch 59): FAILED (tasks=false, mirror=false, pickWins=false)` ✓
+2. **GREEN**：**105 OK / 0 FAILED**（104 + 新增 1）、`eslint` 0 error、`vite build` exit 0 ✓
+
+**RTM（批次 59）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-5901 | 載入專案／版本後，共用狀態必須立即同步該專案的 `tasks`（不得留下前一份 programme） | GanttPage `handleProjectLoaded` | 使用者回報點專案後閃退回原始頁 | Fixed |
+| FR-5902 | mirror effect 的「沿用儲存任務」分支只可鏡射 peer page 的發佈 | GanttPage mirror effect (3) | 同上 | Fixed |
+| FR-5903 | Explorer 選專案／版本時，本頁先前載入的檔案必須讓位（清除），不得蓋回畫面 | DataExplorerPage `applyVersion` | 同上 | Fixed |
+| AC-5901 | 批次 59 斷言紅→綠；煙霧測試 105 OK / 0 FAILED、eslint 0 error、build exit 0 | 量測（2026-09-22） | — | Verified |
+
+---
+
+## 🔁 批次 60（2026-09-22）— 共用 programme 必須撐得住「重新載入 / 重新掛載」
+
+### 為什麼會「退回原始頁」的第二條路徑
+`writePersistedProgramme()` 舊行為：
+
+```js
+const text = String(programme.text || "");
+if (text.length > MAX_PERSISTED_TEXT) return false;   // ← 直接放棄，什麼都沒寫 ✗
+```
+
+只要檔案原文超過 2 MB，就**連 `projectId`／`versionId`／`fileName` 都不寫** ✗。
+於是任何「重新載入」或「路由被卸載再掛回」（例如 `AuthProvider` 檢查期間顯示 spinner，
+`AuthenticatedApp` 會整段 unmount ✓）之後：
+
+- Gantt：`sharedProgramme?.tasks` 為空 → 回到內建 `DEFAULT_TASKS`（＝使用者眼中的「原始頁」）✗
+- Explorer：沒有 `projectId` 可自我修復 → 只能靠 adopt 最新專案（若後端沒資料就是空狀態）✗
+
+### 修正
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | `writePersistedProgramme()` 改為：**metadata 一定寫**；`tasks` 在 `MAX_PERSISTED_TASKS`（1.5 MB）內就寫；`text` 在 2 MB 內才寫。回傳值仍代表「**text 是否寫入**」，維持既有契約 | `src/lib/programmeStore.jsx` |
+| 2 | 新增常數 `MAX_PERSISTED_TASKS = 1536 * 1024` | 同上 |
+| 3 | 批次 60 回歸測試（大 text 仍保留 project/version/tasks；小 text 正常；tasks 過大時略過但 metadata 保留） | `scripts/smoke-test.mjs` |
+
+### 效果
+- 重新載入 / 重新掛載後，Gantt **直接回到同一份 programme**（不再先閃 `DEFAULT_TASKS`）✓
+- Explorer 由持久化的 `projectId`／`versionId` 還原同一專案／版本（配合批次 51/52/54）✓
+- 大量資料時仍不會撐爆 localStorage（tasks 1.5 MB、text 2 MB 兩道守衛）✓
+
+### 驗證
+**GREEN：106 OK / 0 FAILED**（105 + 新增 1）、`eslint` 0 error、`vite build` exit 0 ✓
+（註：此批與批次 59 同批交付；批次 49 既有的「大 text 回傳 false」斷言仍為綠 ✓）
+
+**RTM（批次 60）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-6001 | 檔案原文過大時，metadata（projectId／versionId／fileName）仍必須持久化 | `writePersistedProgramme` | 使用者回報點專案後閃退回原始頁 | Fixed |
+| FR-6002 | 解析後的 `tasks` 必須持久化（≤1.5 MB），使重新載入／重新掛載回到同一 programme | `MAX_PERSISTED_TASKS` | 兩邊頁面完整展示 | Fixed |
+| NFR-6001 | 兩道獨立大小守衛（tasks 1.5 MB、text 2 MB），任一超限不影響其他欄位 | 同上 | Storage quota safety | Verified |
+| AC-6001 | 批次 60 斷言：大 text 仍保留 project/version/tasks、小 text 正常、超大 tasks 被略過但 metadata 保留 | 量測（2026-09-22） | — | Verified |
+| AC-6002 | 煙霧測試 106 OK / 0 FAILED、eslint 0 error、build exit 0 | 量測（2026-09-22） | — | Verified |
+
+---
+
+## 🗂️ 批次 61（2026-09-22）— Data Explorer 預設開啟 `PROJECT`
+
+### 使用者需求
+「data-explorer 中，預設優先顯示 PROJECT 頁的內容」
+
+### 問題
+`TableBrowser` 的預設選取是 `index[0]`（`buildTableIndex` 依字母排序）✗。
+真實 XER 有 15 張表，`APPLYACTOPTIONS` 排在 `PROJECT` 前面 → 一開頁看到的是沒人看的表 ✗。
+
+### 修正
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | 新增純函式 `defaultTableName(index)`：有 `PROJECT`（不分大小寫，故 P6 XML 的 `Project` 也適用）就回它，否則回索引第一張表；空索引／`null` 回 `null` | `src/lib/dataExplorer.js` |
+| 2 | `TableBrowser` 以 `fallbackName = defaultTableName(index)` 決定預設選取：使用者既有選擇（`activeName`）優先 → 否則預設表 → 否則第一張 | `src/components/dataexplorer/TableBrowser.jsx` |
+| 3 | 批次 61 回歸測試（真實字母序、XML 大小寫、無 PROJECT 的檔案、空輸入、瀏覽器接線） | `scripts/smoke-test.mjs` |
+
+### 行為
+- 開檔／切專案／切版本後，若目前選取的表格不存在，就落在 `PROJECT`（而不是 `APPLYACTOPTIONS`）✓
+- 使用者手動選過的表在切換資料來源時仍會保留（同名表存在時）✓
+- 檔案沒有 `PROJECT`（例如只有 `TASK`）→ 維持字母序第一張（不會空白）✓
+
+### 驗證（TDD：先 RED 再 GREEN）
+1. **RED**：`The Explorer opens on PROJECT by default (batch 61): FAILED: TypeError: lib.defaultTableName is not a function` ✓（其餘 106 OK）
+2. 期間修正了一條**測試期望寫錯**（無 PROJECT 時的 fallback 是字母序第一張 `CURRTYPE`，不是 `TASK`）✓
+3. **GREEN**：**107 OK / 0 FAILED**（106 + 新增 1）、`eslint` 0 error、`vite build` exit 0 ✓
+
+**RTM（批次 61）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-6101 | Data Explorer 預設必須顯示 `PROJECT` 表（存在時），不得落在字母序第一張 | `defaultTableName()` ＋ TableBrowser | 使用者要求預設顯示 PROJECT | Complete |
+| FR-6102 | 無 `PROJECT` 的檔案必須退回第一張表（不得空白） | 同上 | 同上 | Complete |
+| NFR-6101 | 大小寫不敏感（P6 XML 的 `Project` 亦適用）；空索引／`null` 安全 | `defaultTableName()` | — | Verified |
+| AC-6101 | 真實字母序 fixture（APPLYACTOPTIONS/CALENDAR/CURRTYPE/PROJECT/TASK）→ 選中 `PROJECT` | 量測（2026-09-22） | — | Verified |
+| AC-6102 | 煙霧測試 107 OK / 0 FAILED、eslint 0 error、build exit 0 | 量測（2026-09-22） | — | Verified |

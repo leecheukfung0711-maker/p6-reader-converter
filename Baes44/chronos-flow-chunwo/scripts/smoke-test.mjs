@@ -2401,7 +2401,781 @@ try {
 }
 
 
+// ── Batch 48 regression guard — P6 Data Explorer (standalone table browser) ───
+// A separate page lists every raw table of a loaded XER / P6 XML file and shows
+// its records (xerviewer-style). The helpers are pure and asserted directly, the
+// browser component is rendered, and a palette guard keeps the slate/blue
+// reference styling out of this light-only project.
+try {
+  const { readFileSync } = await import("node:fs");
+  const lib = await server.ssrLoadModule("/src/lib/dataExplorer.js");
+
+  const FX = {
+    PROJECT: [{ proj_id: "HOSPEXP", proj_short_name: "Hospital Expansion Project", last_recalc_date: "2022-11-03", web_site_url: "", must_finish_date: "null" }],
+    TASK: [
+      { task_id: "1", task_code: "A1010", task_name: "Excavation", target_drtn_hr_cnt: "80" },
+      { task_id: "2", task_code: "A1020", task_name: "Piling", target_drtn_hr_cnt: "136" },
+    ],
+    TASKPRED: [{ task_id: "1", pred_task_id: "0", pred_type: "PR_FS" }],
+    TASKRSRC: [{ taskrsrc_id: "1", rsrc_id: "9", target_qty: "10" }],
+    PROJCODE: [{ proj_code_id: "1", code_name: "Area" }],
+    FOO_TABLE: [{ a: "1" }],
+  };
+
+  const cats = ["TASK", "TASKPRED", "PROJECT"].every((t) => lib.categoriseTable(t) === "project-structure")
+    && lib.categoriseTable("TASKRSRC") === "resources"
+    && lib.categoriseTable("PROJCODE") === "codes"
+    && lib.categoriseTable("FOO_TABLE") === "other";
+  const groups = lib.groupTableIndex(lib.buildTableIndex(FX));
+  const projGroup = groups.find((g) => g.id === "project-structure");
+  const grouping = !!projGroup && projGroup.tables.length === 3 && groups.every((g) => g.tables.length > 0);
+  const filtered = lib.filterTableIndex(groups, "taskpred");
+  const searching = filtered.length === 1 && filtered[0].tables.length === 1 && filtered[0].tables[0].name === "TASKPRED";
+  const cols = lib.columnKeys(FX.TASK);
+  const columns = cols.length === 4 && cols[0] === "task_id" && cols[3] === "target_drtn_hr_cnt";
+  const blanks = lib.formatCell("") === "N/A" && lib.formatCell("null") === "N/A"
+    && lib.formatCell(undefined) === "N/A" && lib.formatCell("0") === "0";
+  const labels = lib.fieldLabel("proj_short_name") === "Project Name" && lib.fieldLabel("weird_field") === "weird_field";
+  const propGroups = lib.propertyGroupsFor(["proj_short_name", "last_recalc_date", "def_complete_pct_type", "unknown_x"]);
+  const properties = propGroups.map((g) => g.id).join(",") === "general,dates,defaults,other";
+  const slice = lib.visibleRows(Array.from({ length: 640 }, (_, i) => ({ i })), 500);
+  const paging = slice.rows.length === 500 && slice.truncated === true;
+  const xml = lib.tablesFromXml('<Project ObjectId="1" Id="HOSPEXP" Name="Hospital"/>'
+    + '<Activity ObjectId="2" Id="A1010" Name="Excavate" Duration="10"/>'
+    + '<Activity ObjectId="3" Id="A1020" Name="Pile" Duration="20"/>');
+  const xmlOk = !!xml.Project && xml.Project[0].Id === "HOSPEXP" && xml.Activity.length === 2 && xml.Activity[1].Name === "Pile";
+  const helperOk = cats && grouping && searching && columns && blanks && labels && properties && paging && xmlOk;
+
+  results.push([
+    "Data Explorer helpers (batch 48)",
+    helperOk
+      ? `OK (${groups.length} categories, ${lib.buildTableIndex(FX).length} tables; search, columns, N/A, labels, property groups, row slice and XML tables correct)`
+      : `FAILED (cats=${cats}, grouping=${grouping}, search=${searching}, columns=${columns}, blanks=${blanks}, labels=${labels}, properties=${properties}, paging=${paging}, xml=${xmlOk})`,
+  ]);
+
+  // Rendered browser: sidebar categories, single-row table → property cards,
+  // multi-row table → data grid, footer with the file name and table count.
+  const { default: TableBrowser } = await server.ssrLoadModule("/src/components/dataexplorer/TableBrowser.jsx");
+  const html = (selected) => renderToString(React.createElement(TableBrowser, {
+    fileName: "Hospital Expansion Project (Sample).xer", tables: FX, initialTable: selected,
+  })).replace(/<!--[^>]*-->/g, "");
+  const cards = html("PROJECT");
+  const grid = html("TASK");
+  const renderOk = (cards.match(/data-table-name="/g) || []).length === 6
+    && cards.includes('data-category="project-structure"')
+    && cards.includes('data-active-table="PROJECT"') && cards.includes('data-view="cards"')
+    && cards.includes('data-table-count="6"')
+    && cards.includes("Hospital Expansion Project") && cards.includes("N/A")
+    && cards.includes("Current File:") && cards.includes("Hospital Expansion Project (Sample).xer")
+    && grid.includes('data-view="grid"') && grid.includes('data-row-count="2"') && grid.includes("A1010");
+  results.push([
+    "Data Explorer page render (batch 48)",
+    renderOk
+      ? "OK (6 tables across the categories, PROJECT as property cards with N/A, TASK as a 2-row grid, footer shows file + total)"
+      : `FAILED (side=${(cards.match(/data-table-name="/g) || []).length}, cat=${cards.includes('data-category="project-structure"')}, cards=${cards.includes("Hospital Expansion Project")}, count=${cards.includes('data-table-count="6"')}, grid=${grid.includes('data-view="grid"')}, rows=${grid.includes('data-row-count="2"')})`,
+  ]);
+
+  // Wiring + palette guard: the page must be routed and linked from the Gantt
+  // toolbar, and neither new file may use the reference's slate/blue palette or
+  // any dark-theme utility (Common Look and Feel is light-only).
+  const browserSrc = readFileSync("src/components/dataexplorer/TableBrowser.jsx", "utf8");
+  const pageSrc = readFileSync("src/pages/DataExplorerPage.jsx", "utf8");
+  const appSrc = readFileSync("src/App.jsx", "utf8");
+  const ganttSrc = readFileSync("src/pages/GanttPage.jsx", "utf8");
+  const noDark = [browserSrc, pageSrc].every((s) => !/dark:/.test(s) && !/prefers-color-scheme/.test(s));
+  const paletteOnly = [browserSrc, pageSrc].every((s) => !/(bg|text|border|ring)-(slate|blue|gray|zinc|neutral|stone)-\d/.test(s))
+    && /bg-surface/.test(browserSrc) && /text-text/.test(browserSrc) && /border-border/.test(browserSrc);
+  const routed = /path="\/data-explorer"/.test(appSrc) && /DataExplorerPage/.test(appSrc)
+    && /to="\/data-explorer"/.test(ganttSrc);
+  results.push([
+    "Data Explorer wiring + palette guard (batch 48)",
+    noDark && paletteOnly && routed
+      ? "OK (route /data-explorer + Gantt Tools link, palette tokens only, no slate/blue or dark: remnants)"
+      : `FAILED (noDark=${noDark}, paletteOnly=${paletteOnly}, routed=${routed})`,
+  ]);
+} catch (e) {
+  results.push(["Data Explorer (batch 48)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
+
+// ── Batch 49 regression guard — shared programme (Gantt ⇄ Data Explorer) ─────
+// A file loaded in either page must land in one shared store, so the other page
+// shows the same tables and the same selected project without a re-upload.
+try {
+  const { readFileSync } = await import("node:fs");
+  const { MemoryRouter } = await import("react-router-dom");
+  const store = await server.ssrLoadModule("/src/lib/programmeStore.jsx");
+  const { ProgrammeProvider } = store;
+
+  const FX = {
+    PROJECT: [{ proj_id: "HOSPEXP", proj_short_name: "Hospital Expansion Project" }],
+    TASK: [{ task_id: "1", task_code: "A1010", task_name: "Excavation" }],
+  };
+  const shared = {
+    fileName: "Hospital Expansion Project.xer", format: "xer", tables: FX, text: "%T\tPROJECT",
+    projectId: "p1", projectName: "Hospital Expansion Project", source: "gantt", revision: 3,
+  };
+
+  const fake = (() => {
+    const m = new Map();
+    return {
+      getItem: (k) => (m.has(k) ? m.get(k) : null),
+      setItem: (k, v) => m.set(k, String(v)),
+      removeItem: (k) => m.delete(k),
+    };
+  })();
+  store.writePersistedProgramme(fake, shared);
+  const restored = store.readPersistedProgramme(fake);
+  const empty = store.emptyProgramme();
+  const bigOk = store.writePersistedProgramme(fake, { ...shared, text: "x".repeat(3 * 1024 * 1024) });
+  const persistOk = restored.fileName === shared.fileName
+    && restored.projectId === "p1" && restored.projectName === "Hospital Expansion Project"
+    && restored.text === "%T\tPROJECT"               // small files keep their text (re-parsed on demand)
+    && !restored.tables                              // heavy parsed tables stay in memory only
+    && bigOk === false && empty.revision === 0 && !empty.tables;
+
+  const { default: DataExplorerPage } = await server.ssrLoadModule("/src/pages/DataExplorerPage.jsx");
+  const pageHtml = renderToString(
+    React.createElement(ProgrammeProvider, { initial: shared },
+      React.createElement(MemoryRouter, null, React.createElement(DataExplorerPage)))
+  ).replace(/<!--[^>]*-->/g, "");
+  const pageOk = pageHtml.includes("Hospital Expansion Project.xer")   // shared file name
+    && pageHtml.includes('data-active-table="PROJECT"')                // shared tables rendered
+    && pageHtml.includes('data-shared-programme="gantt"')              // provenance carried over
+    && pageHtml.includes("Loaded in the Gantt page");
+
+  const gantt = readFileSync("src/pages/GanttPage.jsx", "utf8");
+  const explorer = readFileSync("src/pages/DataExplorerPage.jsx", "utf8");
+  const app = readFileSync("src/App.jsx", "utf8");
+  const wiringOk = (gantt.match(/publishProgramme\(/g) || []).length >= 2
+    && /useProgramme\(/.test(gantt)
+    && /publishProgramme\(/.test(explorer) && /useProgramme\(/.test(explorer)
+    && /<ProgrammeProvider>/.test(app);
+
+  results.push([
+    "Shared programme store (batch 49)",
+    persistOk && pageOk && wiringOk
+      ? "OK (metadata persisted + restored, oversized payloads skipped, Explorer renders the Gantt-loaded file/project/tables with a provenance hint, both pages publish, routes wrapped)"
+      : `FAILED (persist=${persistOk}, page=${pageOk}, wiring=${wiringOk})`,
+  ]);
+} catch (e) {
+  results.push(["Shared programme store (batch 49)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
+
+// ── Batch 50 regression guard — project selector in the Data Explorer ────────
+// The Explorer can switch projects too: it lists the local backend's projects,
+// publishes the choice and the Gantt page loads the same project (and vice
+// versa). Stored versions only carry parsed activities, so they are shown as a
+// TASK table (clearly built from the stored version, not from a raw file).
+try {
+  const { readFileSync } = await import("node:fs");
+  const lib = await server.ssrLoadModule("/src/lib/projectOptions.js");
+
+  const PROJECTS = [
+    {
+      id: "p1", name: "Hospital Expansion",
+      latest_version: {
+        id: "v1", name: "Import 1", created_at: "2026-09-22T10:00:00",
+        payload: {
+          tasks: [
+            { isSection: true, activity: "Section" },
+            { activityId: "A1010", activity: "Excavation", item: "1.1", start: "2021-09-01", end: "2021-09-20", pct: 100 },
+          ],
+          meta: { source_filename: "Hosp.xer", source_format: "xer", last_recalc_date: "2022-11-03" },
+        },
+      },
+    },
+    { id: "p2", name: "Bridge Works" },
+  ];
+
+  const opts = lib.projectOptions(PROJECTS);
+  const optionsOk = opts.length === 2 && opts[0].value === "p2" && opts[1].value === "p1"
+    && opts[0].label === "Bridge Works" && opts[1].label === "Hospital Expansion";
+  const summary = lib.versionSummary(PROJECTS[0]);
+  const summaryOk = summary.versionName === "Import 1" && summary.taskCount === 1
+    && summary.fileName === "Hosp.xer" && summary.format === "xer" && summary.recalcDate === "2022-11-03";
+  const stored = lib.storedVersionTables(PROJECTS[0]);
+  const storedOk = !!stored.TASK && stored.TASK.length === 1
+    && stored.TASK[0].task_code === "A1010" && stored.TASK[0].act_start_date === "2021-09-01"
+    && stored.TASK[0].phys_complete_pct === "100" && stored.TASK[0].wbs_short_name === "1.1";
+  const emptyOk = lib.storedVersionTables({ id: "p3", name: "Empty" }) === null
+    && lib.storedVersionTables(null) === null;
+
+  const { default: ProjectSelector } = await server.ssrLoadModule("/src/components/dataexplorer/ProjectSelector.jsx");
+  const sel = (props) => renderToString(React.createElement(ProjectSelector, props)).replace(/<!--[^>]*-->/g, "");
+  const picked = sel({ projects: PROJECTS, value: "p1", onChange: () => {}, onRefresh: () => {} });
+  const empty = sel({ projects: [], value: null, onChange: () => {}, onRefresh: () => {}, error: "本地後端未啟動 — 請執行 scripts\\start-backend.bat" });
+  const renderOk = picked.includes('data-project-selector="true"') && picked.includes('data-project-id="p1"')
+    && picked.includes('<option value="p1"') && picked.includes('<option value="p2"')
+    && picked.includes("Hospital Expansion") && picked.includes("Bridge Works")
+    && /<option value="p1"[^>]*selected/.test(picked)                 // the shared project is the selected one
+    && empty.includes("No projects yet") && empty.includes("本地後端未啟動")
+    && !/dark:/.test(picked) && !/(bg|text|border|ring)-(slate|blue|gray|zinc|neutral|stone)-\d/.test(picked);
+
+  const gantt = readFileSync("src/pages/GanttPage.jsx", "utf8");
+  const explorer = readFileSync("src/pages/DataExplorerPage.jsx", "utf8");
+  const wiringOk = /listProjects\(/.test(explorer) && /getProject\(/.test(explorer)
+    && /ProjectSelector/.test(explorer) && /explorerTableSource/.test(explorer)
+    && /publishProgramme\(\{[^}]*projectId/s.test(explorer)
+    && /getProject\(/.test(gantt) && /sharedProgramme\.projectId/.test(gantt);
+
+  results.push([
+    "Project selector + project sync (batch 50)",
+    optionsOk && summaryOk && storedOk && emptyOk && renderOk && wiringOk
+      ? "OK (projects listed + summarised, stored version rendered as a TASK table, selector renders/selects/empty-state/backend hint with palette tokens, both pages wired)"
+      : `FAILED (options=${optionsOk}, summary=${summaryOk}, stored=${storedOk}, empty=${emptyOk}, render=${renderOk}, wiring=${wiringOk})`,
+  ]);
+} catch (e) {
+  results.push(["Project selector + project sync (batch 50)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
+
+// ── Batch 51 regression guard — a stored project shows its data in the Explorer ─
+// Picking a saved project in the Gantt page publishes the project only (versions
+// keep activities, not raw tables). The Explorer must therefore fetch that version
+// itself and render its activities — and explain itself while it has nothing yet.
+try {
+  const { readFileSync } = await import("node:fs");
+  const { MemoryRouter } = await import("react-router-dom");
+  const { ProgrammeProvider } = await server.ssrLoadModule("/src/lib/programmeStore.jsx");
+  const { default: DataExplorerPage } = await server.ssrLoadModule("/src/pages/DataExplorerPage.jsx");
+
+  const sharedProject = {
+    fileName: "Hospital Expansion", format: null, tables: null, text: "",
+    projectId: "p1", projectName: "Hospital Expansion", source: "gantt", revision: 7,
+  };
+  const html = renderToString(
+    React.createElement(ProgrammeProvider, { initial: sharedProject },
+      React.createElement(MemoryRouter, null, React.createElement(DataExplorerPage)))
+  ).replace(/<!--[^>]*-->/g, "");
+
+  const rendered = html.includes('data-project-id="p1"')        // the selector follows the shared project
+    && html.includes("Hospital Expansion")                      // the project is named on screen
+    && html.includes("data-empty-project")                      // explicit empty state while it loads
+    && html.includes("stored version");                         // …which explains what is missing
+
+  const page = readFileSync("src/pages/DataExplorerPage.jsx", "utf8");
+  const gantt = readFileSync("src/pages/GanttPage.jsx", "utf8");
+  const wiringOk = /adoptedProjectRef/.test(page) && /programme\?\.projectId/.test(page)
+    && /localApi\.getProject\(/.test(page) && /explorerTableSource\(/.test(page)
+    && /text: storedText/.test(gantt) && /tables: sourceTables/.test(gantt);
+
+  results.push([
+    "Stored project shows data in the Explorer (batch 51)",
+    rendered && wiringOk
+      ? "OK (the shared project is fetched by the Explorer and rendered as its stored activities; the empty state explains itself; a project publish clears the previous file's text)"
+      : `FAILED (rendered=${rendered}, wiring=${wiringOk})`,
+  ]);
+} catch (e) {
+  results.push(["Stored project shows data in the Explorer (batch 51)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
+
+// ── Batch 52 regression guard — the Explorer is never blank when data exists ───
+// Two gaps found by hand: (1) a store without projectId (projects chosen before
+// the shared store existed) left the Explorer empty even though the backend held
+// programmes, and (2) returning to the Gantt page reset it, because the mirror
+// effect only restored what the EXPLORER had published.
+try {
+  const { readFileSync } = await import("node:fs");
+  const lib = await server.ssrLoadModule("/src/lib/projectOptions.js");
+
+  const PROJECTS = [
+    { id: "p2", name: "Bridge Works", latest_version: { name: "Save A", created_at: "2026-09-20T09:00:00" } },
+    { id: "p1", name: "Hospital Expansion", latest_version: { name: "Save B", created_at: "2026-09-22T13:49:13" } },
+    { id: "p3", name: "No versions yet" },
+  ];
+  const newest = lib.newestProject(PROJECTS);
+  const newestOk = !!newest && newest.id === "p1"                       // newest stored version wins
+    && lib.newestProject([{ id: "p9", name: "A" }, { id: "p8", name: "B" }]).id === "p9"  // …fallback: first named
+    && lib.newestProject([]) === null && lib.newestProject(null) === null;
+
+  const page = readFileSync("src/pages/DataExplorerPage.jsx", "utf8");
+  const gantt = readFileSync("src/pages/GanttPage.jsx", "utf8");
+  const explorerAdopts = /newestProject\(/.test(page)
+    && /adoptedProjectRef/.test(page)
+    && /const targetId = programme\?\.projectId \|\| newestProject\(projects\)\?\.id/.test(page)
+    && /publishProgramme\(\{[\s\S]{0,200}projectId: project\?\.id/.test(page);
+
+  // the Gantt must restore the shared PROJECT regardless of who published it,
+  // i.e. the project branch comes before the "only files from the Explorer" guard
+  const projectBranch = gantt.indexOf("sharedProgramme.projectId");
+  const explorerOnlyGuard = gantt.indexOf('sharedProgramme.source !== "explorer"');
+  const ganttRestores = projectBranch > 0 && explorerOnlyGuard > projectBranch
+    && /restore the shared project/.test(gantt);
+
+  results.push([
+    "Never-blank Explorer + Gantt restore (batch 52)",
+    newestOk && explorerAdopts && ganttRestores
+      ? "OK (newest stored project is auto-adopted when the store has none, the choice is published, and the Gantt restores the shared project whichever page picked it)"
+      : `FAILED (newest=${newestOk}, explorer=${explorerAdopts}, gantt=${ganttRestores}, projectBranch=${projectBranch}, guard=${explorerOnlyGuard})`,
+  ]);
+} catch (e) {
+  results.push(["Never-blank Explorer + Gantt restore (batch 52)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
+
+// ── Batch 53 regression guard — stored versions keep the raw tables ───────────
+// So that switching project in the Explorer shows PROJECT / TASKPRED / RSRC … and
+// not just the parsed activities, a saved version carries `payload.xerTables`
+// (size-guarded). Versions stored before this keep working through the activities
+// fallback and say so.
+try {
+  const { readFileSync } = await import("node:fs");
+  const lib = await server.ssrLoadModule("/src/lib/projectOptions.js");
+
+  const RAW = { PROJECT: [{ proj_id: "HOSPEXP" }], TASKPRED: [{ task_id: "1" }] };
+  const withRaw = { id: "p1", name: "Hospital", latest_version: { name: "V", payload: { tasks: [{ activityId: "A1" }], meta: {}, xerTables: RAW } } };
+  const legacy = { id: "p2", name: "Legacy", latest_version: { name: "V", payload: { tasks: [{ activityId: "A1" }], meta: {} } } };
+  const blank = { id: "p3", name: "Blank" };
+
+  const sizeOk = lib.tablesJsonSize(RAW) === JSON.stringify(RAW).length
+    && lib.tablesWithinLimit(RAW) === true
+    && lib.tablesWithinLimit(RAW, 10) === false
+    && lib.tablesWithinLimit(null) === true;
+
+  const rawOk = lib.versionRawTables(withRaw) === RAW && lib.versionRawTables(legacy) === null
+    && lib.versionRawTables({ latest_version: { payload: { xerTables: {} } } }) === null
+    && lib.versionRawTables(null) === null;
+
+  const s1 = lib.explorerTableSource(withRaw);
+  const s2 = lib.explorerTableSource(legacy);
+  const s3 = lib.explorerTableSource(blank);
+  const sourceOk = s1.source === "raw" && s1.tables === RAW
+    && s2.source === "activities" && s2.tables.TASK.length === 1
+    && s3.source === null && s3.tables === null;
+
+  const summaryOk = lib.versionSummary(withRaw).hasRawTables === true
+    && lib.versionSummary(withRaw).tableCount === 2
+    && lib.versionSummary(legacy).hasRawTables === false
+    && lib.versionSummary(legacy).tableCount === 0;
+
+  const projectBar = readFileSync("src/components/gantt/ProjectBar.jsx", "utf8");
+  const gantt = readFileSync("src/pages/GanttPage.jsx", "utf8");
+  const page = readFileSync("src/pages/DataExplorerPage.jsx", "utf8");
+  const wiringOk = /tablesWithinLimit\(/.test(projectBar) && /\{\s*xerTables\s*\}/.test(projectBar)
+    && /payload\?\.xerTables/.test(gantt) && /xerTables=\{xerSource\}/.test(gantt)
+    && /explorerTableSource\(/.test(page) && /data-table-source=/.test(page)
+    && /tables: sourceTables/.test(gantt);
+
+  results.push([
+    "Stored versions carry the raw tables (batch 53)",
+    sizeOk && rawOk && sourceOk && summaryOk && wiringOk
+      ? "OK (size guard + raw-table lookup + raw/activities/null source all correct; ProjectBar saves the tables, the Gantt restores and republishes them, the Explorer labels which source it shows)"
+      : `FAILED (size=${sizeOk}, raw=${rawOk}, source=${sourceOk}, summary=${summaryOk}, wiring=${wiringOk})`,
+  ]);
+} catch (e) {
+  results.push(["Stored versions carry the raw tables (batch 53)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
+
+// ── Batch 54 regression guard — one shared programme + version picking ────────
+// (1) Swapping pages must not lose the loaded programme: the shared store carries
+//     the tasks as well, and the Gantt restores them (and the chosen version) when
+//     it is mounted again.
+// (2) The Explorer can pick a stored VERSION, not just a project.
+try {
+  const { readFileSync } = await import("node:fs");
+  const lib = await server.ssrLoadModule("/src/lib/projectOptions.js");
+  const store = await server.ssrLoadModule("/src/lib/programmeStore.jsx");
+
+  const VERSIONS = [
+    { id: "v1", name: "Import 1", created_at: "2026-09-20T09:00:00", task_count: 10 },
+    { id: "v2", name: "Save 2", created_at: "2026-09-22T13:49:13", task_count: 886 },
+  ];
+  const opts = lib.versionOptions(VERSIONS);
+  const optionsOk = opts.length === 2 && opts[0].value === "v2" && opts[0].label.includes("Save 2")
+    && opts[0].label.includes("886") && opts[1].value === "v1";
+  const newestOk = lib.newestVersion(VERSIONS)?.id === "v2" && lib.newestVersion([]) === null;
+
+  const project = { id: "p1", name: "Hosp", latest_version: { id: "v2", name: "Save 2", payload: { tasks: [] } } };
+  const pickOk = lib.pickVersionTarget({ project, versions: VERSIONS, wantedId: "v1" }) === "v1"
+    && lib.pickVersionTarget({ project, versions: VERSIONS, wantedId: "zz" }) === "v2"
+    && lib.pickVersionTarget({ project, versions: [], wantedId: null }) === "v2"
+    && lib.pickVersionTarget({ project: null, versions: VERSIONS, wantedId: null }) === null;
+
+  const empty = store.emptyProgramme();
+  const storeOk = empty.tasks === null && empty.versionId === null && empty.versionName === "";
+
+  const { default: VersionSelector } = await server.ssrLoadModule("/src/components/dataexplorer/VersionSelector.jsx");
+  const sel = renderToString(React.createElement(VersionSelector, {
+    versions: VERSIONS, value: "v2", onChange: () => {}, onRefresh: () => {},
+  })).replace(/<!--[^>]*-->/g, "");
+  const renderOk = sel.includes('data-version-selector="true"') && sel.includes('data-version-id="v2"')
+    && sel.includes('<option value="v2"') && sel.includes('<option value="v1"')
+    && sel.includes("Save 2") && sel.includes("886")
+    && /<option value="v2"[^>]*selected/.test(sel)
+    && !/dark:/.test(sel) && !/(bg|text|border|ring)-(slate|blue|gray|zinc|neutral|stone)-\d/.test(sel);
+
+  const gantt = readFileSync("src/pages/GanttPage.jsx", "utf8");
+  const page = readFileSync("src/pages/DataExplorerPage.jsx", "utf8");
+  const wiringOk = /getVersion\(/.test(gantt) && /sharedProgramme\.versionId/.test(gantt)
+    && /sharedProgramme\.tasks/.test(gantt) && /publishProgramme\(\{ tasks/.test(gantt)
+    && /listVersions\(/.test(page) && /VersionSelector/.test(page) && /getVersion\(/.test(page)
+    && /versionId: /.test(page);
+
+  // Batch 54b — no flicker: the first paint already shows the shared programme,
+  // edits publish on a debounce, and the Explorer sticks to one table source.
+  const noFlashOk = /useState\(\(\) => \{\s*\n\s*\/\/ Prefer the shared programme/.test(gantt)
+    && /useState\(\(\) => sharedProgramme\?\.projectId/.test(gantt)
+    && /useState\(\(\) => sharedProgramme\?\.tables/.test(gantt)
+    && /setTimeout\(\(\) => publishProgramme\(\{ tasks \}, "gantt"\), 800\)/.test(gantt)
+    && /seenRevisionRef/.test(page)
+    && /const rawTables = tables \|\| projectTables \|\| sharedTables;/.test(page)
+    && /const \{ tables: viewTables/.test(page);
+
+  results.push([
+    "No-flicker first paint + debounced publish (batch 54b)",
+    noFlashOk
+      ? "OK (Gantt's first paint uses the shared programme for tasks/project/tables, task edits publish on an 800ms debounce, Explorer keeps one table source)"
+      : `FAILED (noFlash=${noFlashOk})`,
+  ]);
+
+  results.push([
+    "Shared programme + version picking (batch 54)",
+    optionsOk && newestOk && pickOk && storeOk && renderOk && wiringOk
+      ? "OK (version options newest-first, version target resolution, store carries tasks/version, VersionSelector renders + selects, both pages wired)"
+      : `FAILED (options=${optionsOk}, newest=${newestOk}, pick=${pickOk}, store=${storeOk}, render=${renderOk}, wiring=${wiringOk})`,
+  ]);
+} catch (e) {
+  results.push(["Shared programme + version picking (batch 54)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
+
 console.log("SMOKE TEST RESULTS");
+// ── Batch 55 regression guard — broken characters are surfaced, never invented ─
+// A real XER can already contain U+FFFD (the P6 export wrote a symbol through a
+// UTF-8 pipeline: bytes ef bf bd 47 → "�G"). The Explorer must report that instead
+// of hiding it, and must not "repair" values by guessing.
+try {
+  const { readFileSync } = await import("node:fs");
+  const lib = await server.ssrLoadModule("/src/lib/dataExplorer.js");
+
+  const FX = {
+    CURRTYPE: [
+      { curr_short_name: "USD", curr_symbol: "$" },
+      { curr_short_name: "GBP", curr_symbol: "\uFFFDG" },
+      { curr_short_name: "EUR", curr_symbol: "\uFFFD\uFFFD" },
+    ],
+    TASK: [{ task_code: "A1", task_name: "Fine" }],
+  };
+  const report = lib.brokenValues(FX);
+  const reportOk = report.count === 2 && report.tables.includes("CURRTYPE")
+    && report.samples[0].table === "CURRTYPE" && report.samples[0].field === "curr_symbol"
+    && lib.brokenValues({}).count === 0 && lib.brokenValues(null).count === 0;
+
+  const page = readFileSync("src/pages/DataExplorerPage.jsx", "utf8");
+  const wiringOk = /brokenValues\(/.test(page) && /data-broken-values=/.test(page)
+    && /could not be decoded/.test(page);
+
+  results.push([
+    "Broken file characters are surfaced (batch 55)",
+    reportOk && wiringOk
+      ? "OK (U+FFFD values counted + sampled per table, empty input safe, the page shows a warning strip and never rewrites the values)"
+      : `FAILED (report=${reportOk}, wiring=${wiringOk})`,
+  ]);
+} catch (e) {
+  results.push(["Broken file characters are surfaced (batch 55)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
+// ── Batch 56 regression guard — currency symbols restored from the ISO code ───
+// The real XER lost exactly the four non-ASCII symbols (£ ¥ € ¥) because the export
+// wrote them through a UTF-8 pipeline ("�G", "�D", "��" — proved byte by byte in the
+// batch-55 entry). `curr_short_name` (ISO 4217) survived, so the Explorer restores the
+// symbol from it, never touches an intact value and reports what it could not fix.
+try {
+  const { readFileSync } = await import("node:fs");
+  const symbols = await server.ssrLoadModule("/src/lib/currencySymbols.js");
+  const { brokenValues } = await server.ssrLoadModule("/src/lib/dataExplorer.js");
+
+  // The 18 CURRTYPE rows of 6WSD21-DP_202409.xer exactly as stored.
+  const REAL = [
+    ["USD", "$", "US Dollar"], ["GBP", "\uFFFDG", "Pound Sterling"],
+    ["JPY", "\uFFFDD", "Japanese Yen"], ["EUR", "\uFFFD\uFFFD", "Euro"],
+    ["CNY", "\uFFFDD", "Chinese Yuan Renminbi"], ["CAD", "$", "Canadian Dollar"],
+    ["RUB", "RUB", "Russian Ruble"], ["ARS", "$", "Argentine Peso"],
+    ["BOB", "$b", "Bolivian Boliviano"], ["BRL", "R$", "Brazilian Real"],
+    ["CLP", "$", "Chilean Peso"], ["COP", "$", "Columbian Peso"],
+    ["GYD", "$", "Guyanese Dollar"], ["PYG", "Gs", "Paraguayan Guarani"],
+    ["PEN", "S/.", "Peruvian Nuevo Sol"], ["SRD", "$", "Surinamese Dollar"],
+    ["VEF", "Bs", "Venezuelan Bolivar Fuerto"], ["UYU", "$U", "Uruguayan Peso"],
+  ].map(([curr_short_name, curr_symbol, curr_type]) => ({ curr_short_name, curr_symbol, curr_type }));
+
+  const FX = {
+    CURRTYPE: [...REAL, { curr_short_name: "XXX", curr_symbol: "\uFFFD\uFFFD", curr_type: "Unknown Money" }],
+    TASK: [{ task_code: "A1", task_name: "Fine", curr_symbol: "\uFFFD" }],
+  };
+  const res = symbols.restoreCurrencySymbols(FX);
+  const symbol = (code) => (res.tables.CURRTYPE.find((r) => r.curr_short_name === code) || {}).curr_symbol;
+
+  const restoredOk = symbol("GBP") === "\u00A3" && symbol("JPY") === "\u00A5"
+    && symbol("EUR") === "\u20AC" && symbol("CNY") === "\u00A5";
+  const intactOk = REAL.filter((r) => !r.curr_symbol.includes("\uFFFD"))
+    .every((r) => symbol(r.curr_short_name) === r.curr_symbol);
+  const detailOk = res.restored.length === 4 && res.restored.every((e) => e.table === "CURRTYPE" && e.field === "curr_symbol" && e.to)
+    && res.restored.some((e) => e.code === "GBP" && e.to === "\u00A3" && e.from === "\uFFFDG")
+    && res.restored.some((e) => e.code === "EUR" && e.to === "\u20AC");
+  const unresolvedOk = res.unresolved.length === 2
+    && res.unresolved.some((e) => e.table === "CURRTYPE" && e.code === "XXX")
+    && res.unresolved.some((e) => e.table === "TASK");
+  const purityOk = FX.CURRTYPE[1].curr_symbol === "\uFFFDG" && FX.TASK[0].curr_symbol === "\uFFFD";
+  const emptyOk = symbols.restoreCurrencySymbols(null).restored.length === 0
+    && symbols.restoreCurrencySymbols(null).tables === null
+    && symbols.restoreCurrencySymbols({}).restored.length === 0;
+  // the guarantee: after restoration nothing in the real file is left unreadable,
+  // only the deliberately unresolvable rows (no ISO code / not a currency row) remain.
+  const leftOk = brokenValues(symbols.restoreCurrencySymbols({ CURRTYPE: REAL }).tables).count === 0
+    && brokenValues(res.tables).count === 2;
+
+  const page = readFileSync("src/pages/DataExplorerPage.jsx", "utf8");
+  const pageOk = /restoreCurrencySymbols\(/.test(page) && /data-restored-symbols/.test(page)
+    && /restoredMap=/.test(page);
+  const browser = readFileSync("src/components/dataexplorer/TableBrowser.jsx", "utf8");
+  const browserOk = /restoredMap/.test(browser) && /Restored from the ISO code/.test(browser);
+
+  const pass = restoredOk && intactOk && detailOk && unresolvedOk && purityOk && emptyOk && leftOk && pageOk && browserOk;
+  results.push([
+    "Currency symbols restored from the ISO code (batch 56)",
+    pass
+      ? "OK (GBP/JPY/EUR/CNY restored from curr_short_name, every intact symbol untouched, input not mutated, unrestorable values reported, real table fully readable, page + browser wired)"
+      : `FAILED (restored=${restoredOk}, intact=${intactOk}, detail=${detailOk}, unresolved=${unresolvedOk}, purity=${purityOk}, empty=${emptyOk}, left=${leftOk}, page=${pageOk}, browser=${browserOk})`,
+  ]);
+} catch (e) {
+  results.push(["Currency symbols restored from the ISO code (batch 56)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
+// ── Batch 57 regression guard — a stored version keeps ALL of the programme ───
+// "Store everything so both pages show the same thing": besides the activities the
+// version must carry the file's raw tables *and* the file text, so the Data Explorer
+// can rebuild every table even when the tables were too big to store, and the Gantt
+// gets its xerSource back. Stored text also travels in the shared store.
+try {
+  const { readFileSync } = await import("node:fs");
+  const lib = await server.ssrLoadModule("/src/lib/projectOptions.js");
+
+  const RAW = { PROJECT: [{ proj_id: "HOSPEXP" }], CURRTYPE: [{ curr_short_name: "GBP" }] };
+  const TEXT = "%T\tPROJECT\n%F\tproj_id\n%R\tHOSPEXP\n";
+  const full = { id: "v1", name: "V", created_at: "2026-09-22T10:00:00", payload: { tasks: [{ activityId: "A1" }], meta: { source_format: "xer", source_filename: "a.xer" }, xerTables: RAW, xerText: TEXT } };
+  const textOnly = { id: "v2", name: "V2", payload: { tasks: [{ activityId: "A1" }], meta: { source_format: "xer" }, xerText: TEXT } };
+  const legacy = { id: "v3", name: "V3", payload: { tasks: [{ activityId: "A1" }], meta: {} } };
+  const blank = { id: "v4", name: "V4", payload: {} };
+
+  const textOk = lib.versionRawText(full) === TEXT && lib.versionRawText(textOnly) === TEXT
+    && lib.versionRawText(legacy) === null && lib.versionRawText(blank) === null
+    && lib.versionRawText(null) === null && lib.versionRawText({ payload: { xerText: "" } }) === null;
+
+  const limitOk = lib.textWithinLimit(TEXT) === true && lib.textWithinLimit(null) === true
+    && lib.textWithinLimit("x".repeat(10), 5) === false;
+
+  const s1 = lib.explorerTableSource(full);
+  const s2 = lib.explorerTableSource(textOnly);
+  const s3 = lib.explorerTableSource(legacy);
+  const s4 = lib.explorerTableSource(blank);
+  const sourceOk = s1.source === "raw" && s1.tables === RAW && s1.text === null
+    && s2.source === "rebuild" && s2.tables === null && s2.text === TEXT && s2.summary.format === "xer"
+    && s3.source === "activities" && s3.text === null
+    && s4.source === null;
+
+  const summaryOk = lib.versionSummary(full).hasRawText === true && lib.versionSummary(legacy).hasRawText === false
+    && lib.versionSummary(full).hasRawTables === true && lib.versionSummary(textOnly).hasRawTables === false;
+
+  const projectBar = readFileSync("src/components/gantt/ProjectBar.jsx", "utf8");
+  const gantt = readFileSync("src/pages/GanttPage.jsx", "utf8");
+  const page = readFileSync("src/pages/DataExplorerPage.jsx", "utf8");
+  const wiringOk = /xerText = ""/.test(projectBar) && /textWithinLimit\(/.test(projectBar)
+    && /\{\s*xerText\s*\}/.test(projectBar) && /textWithinLimit\(fileText\) \? \{ xerText: fileText \}/.test(projectBar)
+    && /payload\?\.xerText/.test(gantt) && /text: storedText/.test(gantt)
+    && /xerText=\{sharedProgramme\?\.text \|\| ""\}/.test(gantt)
+    && /rebuild/.test(page) && /tablesFromXml|parseXerTables/.test(page);
+
+  const pass = textOk && limitOk && sourceOk && summaryOk && wiringOk;
+  results.push([
+    "Stored version keeps every piece of the programme (batch 57)",
+    pass
+      ? "OK (xerText accessor + size guard, explorerTableSource raw/rebuild/activities/null, summary hasRawText, ProjectBar saves the text, the Gantt restores and republishes it, the Explorer rebuilds from it)"
+      : `FAILED (text=${textOk}, limit=${limitOk}, source=${sourceOk}, summary=${summaryOk}, wiring=${wiringOk})`,
+  ]);
+} catch (e) {
+  results.push(["Stored version keeps every piece of the programme (batch 57)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
+
+
+// ── Batch 58 — clicking a stored project must never be undone by a stale version ─
+// Root cause found by reading the effects: `handleProjectLoaded` published the
+// shared programme WITHOUT a versionId, so the store kept the previous version id
+// (e.g. the one the Explorer had picked). The Gantt's mirror effect then saw
+// "projectId + a versionId that is not applied yet" and re-loaded that STALE version
+// on top of the project the user had just clicked — the reported flash back.
+try {
+  const { readFileSync } = await import("node:fs");
+  const lib = await server.ssrLoadModule("/src/lib/projectOptions.js");
+
+  // pure: every source carries an activities fallback, so a click can never blank the page
+  const tasks = [{ activityId: "A1", activity: "One" }, { isSection: true, activity: "S" }];
+  const fallbackOk = !!lib.explorerTableSource({ payload: { tasks, xerTables: { PROJECT: [{}] } } }).activities
+    && !!lib.explorerTableSource({ payload: { tasks, xerText: "%T\tPROJECT\n" } }).activities
+    && !!lib.explorerTableSource({ payload: { tasks } }).activities
+    && lib.explorerTableSource({ payload: { meta: {} } }).activities === null;
+
+  const projectBar = readFileSync("src/components/gantt/ProjectBar.jsx", "utf8");
+  const gantt = readFileSync("src/pages/GanttPage.jsx", "utf8");
+  const page = readFileSync("src/pages/DataExplorerPage.jsx", "utf8");
+
+  // the click hands the version over, and the publish records it
+  const clickOk = /onProjectLoaded\(project, null, null, null\)/.test(projectBar)
+    && /onProjectLoaded\(project, payload, null, project\.latest_version \|\| null\)/.test(projectBar)
+    && /onProjectLoaded\(result\.project, result\.payload, null, result\.version \|\| null\)/.test(projectBar)
+    && /onProjectLoaded\(project, version\.payload \|\| payload, xerTables, version \|\| null\)/.test(projectBar)
+    && /handleProjectLoaded = useCallback\(\(project, payload, xerTables, version = null\)/.test(gantt)
+    && /versionId: version\?\.id \? String\(version\.id\) : null/.test(gantt)
+    && /versionName: version\?\.name \|\| ""/.test(gantt);
+
+  // a version reload may only be triggered by a version the Explorer actually picked,
+  // and loading one marks it applied so our own publishes never reload it.
+  const guardOk = /if \(sharedProgramme\.source === "explorer" && sharedProgramme\.projectId && sharedProgramme\.versionId/.test(gantt)
+    && /if \(version\?\.id\) appliedVersionRef\.current = String\(version\.id\)/.test(gantt)
+    && /handleProjectLoaded\(\s*\{ id: sharedProgramme\.projectId/.test(gantt)
+    && /version\s*\n\s*\);\s*\n\s*\} catch \{/.test(gantt);
+
+  // the Explorer falls back to the stored activities when a rebuild yields nothing,
+  // so a rebuild that fails shows the activities instead of the empty state.
+  const explorerOk = /const shownTables = picked\.tables \|\| rebuilt \|\| picked\.activities;/.test(page)
+    && /setProjectSource\(picked\.tables \? "raw" : rebuilt \? "rebuilt"/.test(page)
+    && /if \(programme\.source === "explorer"\) return;/.test(page)
+    && /tables: shownTables/.test(page);
+
+  const pass = fallbackOk && clickOk && guardOk && explorerOk;
+  results.push([
+    "A stored project click survives a stale version (batch 58)",
+    pass
+      ? "OK (ProjectBar hands the version id over, handleProjectLoaded records it, only an Explorer pick reloads a version, the Explorer falls back to the stored activities)"
+      : `FAILED (fallback=${fallbackOk}, click=${clickOk}, guard=${guardOk}, explorer=${explorerOk})`,
+  ]);
+} catch (e) {
+  results.push(["A stored project click survives a stale version (batch 58)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
+
+// ── Batch 59 — the two paths that reverted a freshly clicked project ──────────
+// 1. Gantt: `handleProjectLoaded` published tables/text but NOT `tasks`, so the shared
+//    programme still held the previously loaded file's tasks; mirror effect (3) then
+//    did `setTasks(sharedProgramme.tasks)` and put the OLD programme back — the flash.
+// 2. Explorer: `viewTables = tables || projectTables || sharedTables` let a file loaded
+//    earlier on that page always win, so picking a stored project snapped back to it.
+try {
+  const { readFileSync } = await import("node:fs");
+  const gantt = readFileSync("src/pages/GanttPage.jsx", "utf8");
+  const page = readFileSync("src/pages/DataExplorerPage.jsx", "utf8");
+
+  // the publish that follows a load must carry the tasks it just applied
+  const tasksOk = /let publishTasks = null;/.test(gantt)
+    && /publishTasks = resolvedTasks;/.test(gantt)
+    && /\.\.\.\(publishTasks \? \{ tasks: publishTasks \} : \{\}\)/.test(gantt)
+    && /tables: sourceTables,\s*\n\s*\.\.\.\(publishTasks/.test(gantt);
+
+  // …and the "reuse what the store kept" branch may only mirror a peer page (the
+  // Explorer), never a publish this page made itself.
+  const mirrorOk = /if \(sharedProgramme\.source === "explorer" && sharedProgramme\.tasks && sharedProgramme\.tasks !== tasks\) \{/.test(gantt);
+
+  // picking a project/version on the Explorer replaces a file loaded earlier on that page
+  const pickWinsOk = /if \(tables \|\| fileName\) \{[\s\S]{0,120}setTables\(null\);\s*\n\s*setFileName\(""\);/.test(page);
+
+  const pass = tasksOk && mirrorOk && pickWinsOk;
+  results.push([
+    "A fresh project load is never reverted by stale programme data (batch 59)",
+    pass
+      ? "OK (the load publishes its tasks, the store-mirror branch is Explorer-only, picking a project clears the page's own file)"
+      : `FAILED (tasks=${tasksOk}, mirror=${mirrorOk}, pickWins=${pickWinsOk})`,
+  ]);
+} catch (e) {
+  results.push(["A fresh project load is never reverted by stale programme data (batch 59)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
+
+// ── Batch 60 — the shared programme must survive a reload / remount ───────────
+// Old behaviour: a file text over 2 MB made `writePersistedProgramme` return false
+// WITHOUT writing anything, so a reload lost the project id, the version and the
+// tasks — both pages then fell back to the built-in default programme, which is the
+// other way the reported "flash back to the original page" showed up.
+try {
+  const store = await server.ssrLoadModule("/src/lib/programmeStore.jsx");
+  const fake = (() => {
+    const m = new Map();
+    return {
+      getItem: (k) => (m.has(k) ? m.get(k) : null),
+      setItem: (k, v) => m.set(k, String(v)),
+      removeItem: (k) => m.delete(k),
+    };
+  })();
+
+  const tasks = [{ id: 1, activity: "One" }];
+  const base = {
+    fileName: "p.xer", format: "xer", tasks, projectId: "p1", projectName: "Hosp",
+    versionId: "v1", versionName: "Save 1", source: "gantt", revision: 4,
+  };
+
+  const bigTextStored = store.writePersistedProgramme(fake, { ...base, text: "x".repeat(3 * 1024 * 1024) });
+  const back = store.readPersistedProgramme(fake);
+  const keepsMeta = bigTextStored === false && back.projectId === "p1" && back.versionId === "v1"
+    && back.projectName === "Hosp" && back.text === "" && back.tables === null
+    && Array.isArray(back.tasks) && back.tasks[0].activity === "One";
+
+  const smallTextStored = store.writePersistedProgramme(fake, { ...base, text: "%T\tPROJECT" });
+  const back2 = store.readPersistedProgramme(fake);
+  const keepsText = smallTextStored === true && back2.text === "%T\tPROJECT" && back2.tasks.length === 1;
+
+  const hugeTasks = Array.from({ length: 40000 }, (_, i) => ({ id: i, activity: "A".repeat(60) }));
+  store.writePersistedProgramme(fake, { ...base, text: "", tasks: hugeTasks });
+  const back3 = store.readPersistedProgramme(fake);
+  const guardOk = back3.tasks === null && back3.projectId === "p1";
+
+  const pass = keepsMeta && keepsText && guardOk;
+  results.push([
+    "The shared programme survives a reload (batch 60)",
+    pass
+      ? "OK (a text too big to store no longer discards the project/version/tasks, the tasks are persisted when they fit, an oversized task list is skipped while the metadata survives)"
+      : `FAILED (keepsMeta=${keepsMeta}, keepsText=${keepsText}, guard=${guardOk})`,
+  ]);
+} catch (e) {
+  results.push(["The shared programme survives a reload (batch 60)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
+// ── Batch 61 — the Explorer opens on PROJECT, not on the first table alphabetically ─
+// A real XER has 15 tables and APPLYACTOPTIONS sorts before PROJECT, so the page used
+// to open on a table nobody looks at. The default is now PROJECT (any casing, so the
+// P6 XML spelling "Project" works too), with the first table as the fallback.
+try {
+  const { readFileSync } = await import("node:fs");
+  const lib = await server.ssrLoadModule("/src/lib/dataExplorer.js");
+
+  const realOrder = lib.buildTableIndex({
+    APPLYACTOPTIONS: [{}], CALENDAR: [{}], CURRTYPE: [{}], PROJECT: [{ proj_id: "P" }], TASK: [{}],
+  });
+  const xmlOrder = lib.buildTableIndex({ Project: [{ ProjId: "P" }], Task: [{}] });
+  const noProject = lib.buildTableIndex({ TASK: [{}], CURRTYPE: [{}] });
+
+  const pickOk = lib.defaultTableName(realOrder) === "PROJECT"
+    && lib.defaultTableName(xmlOrder) === "Project"
+    && lib.defaultTableName(noProject) === "CURRTYPE"      // no PROJECT: the first table of the index
+    && lib.defaultTableName(lib.buildTableIndex({})) === null
+    && lib.defaultTableName(null) === null;
+
+  const browser = readFileSync("src/components/dataexplorer/TableBrowser.jsx", "utf8");
+  const wiringOk = /defaultTableName\(/.test(browser)
+    && /index\.find\(\(t\) => t\.name === fallbackName\)/.test(browser);
+
+  results.push([
+    "The Explorer opens on PROJECT by default (batch 61)",
+    pickOk && wiringOk
+      ? "OK (PROJECT wins over the alphabetical order, the P6 XML casing works, a file without PROJECT keeps the first table, empty input safe, the browser uses it)"
+      : `FAILED (pick=${pickOk}, wiring=${wiringOk})`,
+  ]);
+} catch (e) {
+  results.push(["The Explorer opens on PROJECT by default (batch 61)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
 for (const [l, r] of results) console.log(`  ${l}: ${r}`);
 await server.close();
 process.exit(0);
