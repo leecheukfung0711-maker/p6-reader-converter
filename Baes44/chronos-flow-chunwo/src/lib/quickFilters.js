@@ -21,16 +21,6 @@
  *               bar colour, i.e. the reference's default `zeroFloat` method
  *   Custom    → opens this app's existing P6 filter dialog (FilterBar / FilterDialog)
  */
-export const QUICK_FILTER_PILLS = [
-  { id: "all", label: "All", kind: "all" },
-  { id: "TK_NotStart", label: "Not Started", kind: "status" },
-  { id: "TK_Active", label: "In Progress", kind: "status" },
-  { id: "TK_Complete", label: "Completed", kind: "status" },
-  { id: "started", label: "Started", kind: "flag" },
-  { id: "milestones", label: "Milestones", kind: "flag" },
-  { id: "critical", label: "Critical Path", kind: "flag" },
-];
-
 /** P6 status codes and their labels (same wording as the reference menu). */
 export const P6_STATUS_CODES = [
   { code: "TK_NotStart", label: "Not Started" },

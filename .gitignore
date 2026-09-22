@@ -20,3 +20,7 @@ __pycache__/
 .claude/
 .codegraph/
 .DS_Store
+
+# Python lint cache
+.ruff_cache/
+

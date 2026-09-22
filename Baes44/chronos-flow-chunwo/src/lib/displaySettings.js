@@ -498,7 +498,6 @@ export const WBS_FONT_FAMILIES = [
   { value: "Monaco, Consolas, monospace", label: "Monaco" },
 ];
 
-export const WBS_FONT_SIZES = [8, 9, 10, 11, 12, 13, 14, 16, 18, 20].map(v => ({ value: String(v), label: `${v} px` }));
 export const WBS_FONT_WEIGHTS = [
   { value: "normal", label: "Normal" },
   { value: "bold",   label: "Bold" },
@@ -641,8 +640,6 @@ export const WBS_GROUP_LEVELS = [
   ...Array.from({ length: WBS_LEVEL_COUNT }, (_, i) => ({ value: i + 1, label: `Level ${i + 1}` })),
 ];
 
-/** "Group By" choices (only WBS is supported today). */
-export const GROUP_BY_OPTIONS = [{ value: "wbs", label: "WBS" }];
 
 /**
  * "To Level" choices for the CURRENT data — exactly like the reference panel,

@@ -93,19 +93,6 @@ export function inferSectionLevels(tasks, { overwrite = false } = {}) {
   return { tasks: next, stats };
 }
 
-/** Level distribution of a task list — used by the import report / WBS panel. */
-export function levelStats(tasks) {
-  const counts = {};
-  let maxLevel = 0;
-  (Array.isArray(tasks) ? tasks : []).forEach((t) => {
-    if (!t || !t.isSection) return;
-    const level = clampWbsLevel(t.sectionLevel);
-    counts[level] = (counts[level] || 0) + 1;
-    maxLevel = Math.max(maxLevel, level);
-  });
-  return { counts, maxLevel: maxLevel || 1, total: Object.values(counts).reduce((a, b) => a + b, 0) };
-}
-
 /** Human-readable one-liner for the import report, e.g. "L1 3 ／ L2 6 ／ L3 3". */
 export function levelStatsLabel(stats) {
   const parts = Object.keys(stats?.byLevel || {})

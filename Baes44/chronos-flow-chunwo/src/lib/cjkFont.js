@@ -13,7 +13,6 @@
  */
 export const CJK_FONT_URL = "/fonts/NotoSansHK-VF.ttf";
 export const CJK_FONT_NAME = "NotoSansHK";
-export const CJK_FONT_LABEL = "Noto Sans HK (SIL OFL 1.1)";
 
 let cachedBase64 = null;
 let pending = null;
@@ -41,10 +40,6 @@ export function cjkFontBase64() {
   return cachedBase64;
 }
 
-/** Present when loading failed (shown in the Print Preview so the "?" is explained). */
-export function cjkFontError() {
-  return lastError;
-}
 
 /**
  * Fetch the font and cache it as base64. Chunked conversion: `String.fromCharCode(...)`

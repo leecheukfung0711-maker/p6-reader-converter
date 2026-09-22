@@ -107,10 +107,4 @@ export async function decodeTasksFromPDFInfo(info) {
   }
 }
 
-/** Does this Info dictionary carry embedded Gantt data? */
-export function hasEmbeddedGanttData(info) {
-  const subject = String(info?.Subject ?? info?.subject ?? "");
-  return subject.startsWith(MARK_GZ) || subject.startsWith(MARK_PLAIN);
-}
-
 export { MARK_GZ, MARK_PLAIN, OVERFLOW };

@@ -126,12 +126,6 @@ export function comparePageCoverage(cloudRows, localIds, options = {}) {
   return { localCount, cloudCount: cloudFolded.size, missing, missingRatio, needsRerun, reason };
 }
 
-/** Rows the cloud returned that the local engine never saw an ID for (sanity check). */
-export function unmatchedCloudRows(cloudRows, localIds) {
-  const local = new Set((Array.isArray(localIds) ? localIds : []).map((id) => id.folded));
-  return (Array.isArray(cloudRows) ? cloudRows : [])
-    .filter((row) => row && !row.isSection && row.activityId && !local.has(foldOcrId(row.activityId)));
-}
 
 // ── Settings (persisted in localStorage) ─────────────────────────────────────
 
