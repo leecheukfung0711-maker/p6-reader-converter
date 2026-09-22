@@ -1405,7 +1405,7 @@ Return the selected relationships as: predId, succId, type, lag (integer), reaso
             {/* Status */}
             <div className="flex items-center gap-2 p-2.5 bg-surface-subtle border border-border rounded-lg text-xs text-primary">
               <CheckCircle size={13} className="text-primary flex-shrink-0" />
-              <span><strong>{relActivities.length}</strong> activities 繚 <strong>{relExisting.length}</strong> existing rels 繚 <strong className="text-success">{relNew.length}</strong> new</span>
+              <span><strong>{relActivities.length}</strong> activities · <strong>{relExisting.length}</strong> existing rels · <strong className="text-success">{relNew.length}</strong> new</span>
               <button onClick={() => { setRelXmlSource(null); setRelActivities([]); setRelExisting([]); setRelNew([]); }} className="ml-auto text-primary hover:text-primary text-xs underline">← Back</button>
             </div>
             {/* AI */}
@@ -1487,7 +1487,7 @@ Return the selected relationships as: predId, succId, type, lag (integer), reaso
             <div className="flex items-center gap-2">
               <span className="text-[10px] text-text-muted leading-tight text-right max-w-[220px]"
                 title="This PDF embeds the complete task data (all fields). Uploading it back restores everything instantly, without AI/OCR.">
-                🔖 已標記並內嵌完整資料<br />重新上傳此 PDF 可完整還原（不經 AI 辨識）
+                🔖 Tagged with the complete data embedded<br />Upload this PDF back to restore everything (no AI/OCR needed)
               </span>
               <Button size="sm" className="bg-primary hover:bg-primary-active text-surface" onClick={handleExportPDF} title="Preview the PDF, then download it">
                 <Eye size={14} className="mr-1" /> Preview PDF

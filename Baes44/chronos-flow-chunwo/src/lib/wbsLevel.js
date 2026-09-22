@@ -28,7 +28,7 @@ export function clampWbsLevel(value) {
 const toHalfWidth = (s) => s.replace(/[\uFF10-\uFF19]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xFEE0));
 
 /**
- * Leading WBS code: `1`, `1.1`, `1.1.1`, `1.0`, `A`, `A.1`, `CW.1.1`, `第1章`,
+ * Leading WBS code: `1`, `1.1`, `1.1.1`, `1.0`, `A`, `A.1`, `CW.1.1`, Chinese
  * `2)`, `3.` … A delimiter (or end of string) must follow, so ordinary titles
  * such as "Contract No. DC/2023/08" are not mistaken for a hierarchy code.
  */

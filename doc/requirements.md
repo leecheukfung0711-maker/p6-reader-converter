@@ -5171,3 +5171,232 @@ if (text.length > MAX_PERSISTED_TEXT) return false;   // ← 直接放棄，什�
 | NFR-6101 | 大小寫不敏感（P6 XML 的 `Project` 亦適用）；空索引／`null` 安全 | `defaultTableName()` | — | Verified |
 | AC-6101 | 真實字母序 fixture（APPLYACTOPTIONS/CALENDAR/CURRTYPE/PROJECT/TASK）→ 選中 `PROJECT` | 量測（2026-09-22） | — | Verified |
 | AC-6102 | 煙霧測試 107 OK / 0 FAILED、eslint 0 error、build exit 0 | 量測（2026-09-22） | — | Verified |
+
+---
+
+## 📦 批次 62（2026-09-22）— 打包成單一獨立 `P6ReaderConverter.exe`
+
+### 使用者需求
+「將該程序的所有相關功能、內容、插件、資料、數據，全部打包生成一個獨立的 exe 程序文件」
+
+### 做法（單檔 exe，免 Node／免 Python／免 Docker）
+| 步驟 | 內容 |
+|---|---|
+| 1 | 前端 `vite build` → `dist/`，由 FastAPI 託管（SPA fallback，`/data-explorer` 硬重新整理可用） |
+| 2 | 單一埠同時提供：UI、`/local-api/*`（＋裸路徑 `/projects/*` 供開發對照）、`/api/*`（**反向代理到 Base44 雲端**，取代 Vite plugin） |
+| 3 | PyInstaller onefile 入口＝啟動器：挑埠、設資料目錄、開瀏覽器、偵測 OCR 插件 |
+| 4 | SQLite 落在使用者資料夾（`%LOCALAPPDATA%\\P6ReaderConverter\\db`），**不寫入 exe 內部** |
+
+### 新增／修改
+| 檔案 | 內容 |
+|---|---|
+| `backend/desktop_server.py`（新） | 桌面版 FastAPI：UI 靜態託管＋SPA fallback、`/local-api` 與裸路徑雙掛載、`/api/{path}` → Base44 反向代理（httpx，過濾 hop-by-hop 標頭、雲端不可達回 502 不影響 UI） |
+| `desktop/app_launcher.py`（新） | 入口：`--port`（預設 27815，佔用則退空閒埠；固定埠讓 localStorage 跨次保存）、`--data-dir`、`--no-browser`；啟動時印出位址／資料夾／OCR 插件狀態 |
+| `desktop/p6reader.spec`（新） | PyInstaller onefile spec：`frontend/`（含 11.4 MB CJK 字型）＋ hidden imports（uvicorn 各實作、aiosqlite、SQLAlchemy dialect、multipart、httpx、openpyxl、routers、parsers）＋ 排除 tkinter/numpy/pandas/matplotlib |
+| `scripts/build-exe.bat`（新） | 一鍵建置（前端 → PyInstaller → 產物路徑） |
+| `backend/database.py` | 新增 `P6_DB_PATH`（**dotenv 無法覆蓋**）作為打包版權威 DB 位置；開發版行為不變（`backend/db` 或 `DATABASE_URL`） |
+| `backend/requirements.txt`／`pyproject.toml` | 新增 `httpx`（執行期 `/api` 代理用） |
+| `.gitignore` | 排除 `/desktop/build/`、`/desktop/dist/`（exe 以 release asset 發佈，不進 git） |
+| `doc/DESKTOP.md`（新） | 建置／執行／旗標／資料位置／插件／限制 |
+
+### 驗證（實測產物，非推論）
+```
+exe                     : desktop\dist\P6ReaderConverter.exe  27.7 MB（單檔）
+build                   : PYI_EXIT=0（Build complete!）
+啟動 banner             : Address http://127.0.0.1:27898 / Data folder …\p6exe-test / UI bundle: bundled
+                          OCR: PP-OCR helper available / PST-OCR available / Ollama available
+HTTP（由 exe 提供）      : /health 200 · / 200（1.5 KB index.html）· /data-explorer 200（SPA fallback）
+                          /local-api/projects 200 · /fonts/NotoSansHK-VF.ttf 200（11.4 MB CJK 字型）
+/api 代理                : 對 Base44 上游回傳 404（＝已正確轉發，非本機 404 JSON）
+寫入測試                 : POST /local-api/projects 200 → 建立成功並可列出（list count 1）
+資料落地                 : exe 資料夾 DB 建立並寫入（mtime 15:45:51）
+                          ★ 開發用 backend\db\pyworkflow.db 完全未被觸碰（仍為 15:26:27）
+回歸                     : 煙霧測試 107 OK / 0 FAILED（前端無回歸）
+```
+
+### 明確不在 exe 內（外部已安裝工具，啟動時偵測）
+PP-OCR helper `:8199`、PST-OCR `:7861`、Ollama `:11434`（使用者自行安裝／由工作區 `scripts\start-all` 啟動）；
+缺乏時 OCR 匯入路徑降級，其餘功能不受影響。需要連線者僅 `/api`（Base44 登入、雲端 LLM 圖片匯入、Feedback）。
+
+**RTM（批次 62）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-6201 | 提供單一獨立 Windows exe，內含 UI／後端／解析器／字型，免安裝 Node、Python | `desktop/p6reader.spec` ＋ `scripts/build-exe.bat` | 使用者要求打包成獨立 exe | Complete |
+| FR-6202 | exe 以單一埠提供 UI、`/local-api` 與 `/api`（代理至 Base44） | `backend/desktop_server.py` | 同上 | Complete |
+| FR-6203 | 專案資料必須存在使用者資料夾，不寫入 exe；開發環境 DB 不受影響 | `desktop/app_launcher.py` ＋ `P6_DB_PATH` | 使用者要求「資料、數據」一併打包可用 | Complete |
+| FR-6204 | 啟動器需顯示位址、資料夾與 OCR 插件可用狀態 | `app_launcher.py` banner | 插件狀態可視 | Complete |
+| NFR-6201 | 埠可設定且預設固定（27815），佔用時自動退空閒埠（保 localStorage 狀態） | `pick_port()` | 使用體驗 | Complete |
+| NFR-6202 | exe 產物不進 git（release asset），建置可重複 | `.gitignore` ＋ spec | 版本庫衛生 | Complete |
+| AC-6201 | 產物 27.7 MB 單檔；`/health`、`/`、`/data-explorer`、`/local-api`、字型皆 200；`/api` 正確代理 | 實機量測（2026-09-22） | — | Verified |
+| AC-6202 | 經 exe 建立專案成功，資料寫入 exe 資料夾；開發用 DB 未被觸碰 | 實機量測（2026-09-22） | — | Verified |
+| AC-6203 | 煙霧測試 107 OK / 0 FAILED、前端建置 exit 0 | 量測（2026-09-22） | — | Verified |
+
+---
+
+## 📅 批次 63（2026-09-22）— CALENDAR 改為 Calendars 檢視（對齊 xerviewer.org）
+
+### 使用者需求
+「參考 xerviewer.org 的 Calendars，對 data-explorer 的 CALENDAR 顯示模式進行更新」
+（並附上參考站的卡片清單與點開後明細的實際 HTML）
+
+### 資料來源（真實檔實證）
+P6 把整個日曆定義放在**一個欄位** `CALENDAR.clndr_data`，語法為巢狀括號：
+
+```
+(0||CalendarData()(
+   (0||DaysOfWeek()( (0||1()( (0||0(s|07:00|f|17:00)()) ) … (0||7()( … ) ))
+   (0||VIEW(ShowTotal|Y)())
+   (0||Exceptions()( (0||0(d|40179)()) … ) ))
+```
+
+- 星期鍵 **1 = 週日 … 7 = 週六** → 「6d/week」日曆的 day 1 無時段（週日休息 ✓，與 `week_hr_cnt=60` 相符 ✓）
+- 例外是 **P6/OLE 日期序號**：`40179 → 2010-01-01` ✓（與參考站 January 2010 的 1/1 假期一致 ✓）
+- 例外若帶自己的時段（`s|`/`f|`）＝ **working exception**（即參考站圖例第 4 種狀態 ✓）
+- 本檔實測：`7d/w x10` 7×10h／24 假期；`Working Day(6d/week)-updated` 週日休息／6 日／**126 假日** ✓
+- `parseXerTables()` 保留所有欄位（無白名單 ✓），因此 `clndr_data` 完整進入 Explorer ✓
+
+### 實作
+| 檔案 | 內容 |
+|---|---|
+| `src/lib/calendarView.js`（新） | 純函式：`p6SerialToISO`、`periodsIn`、`periodText`、`workWeekFromClndrData`、`exceptionsFromClndrData`、`calendarSummary`、`calendarsFromRows`、`monthGrid`、`exceptionsInMonth`、`monthLabel` |
+| `src/components/dataexplorer/CalendarBrowser.jsx`（新） | 卡片清單（數量說明＋「Filter calendars...」＋每卡：名稱／`Default` 徽章／類型 Base·Project·Rsrc／**h/day · work days/wk · holidays**）＋ `CalendarDialog`（週工時 7 格含時段 tooltip、月份導覽 `« ‹ › »`、月曆格 4 種狀態、圖例、該月例外清單 `Fri, 01 Jan 2010 · Non-working (holiday)`） |
+| `src/components/dataexplorer/TableBrowser.jsx` | `CALENDAR`（不分大小寫，含 P6 XML 的 `Calendar`）改走 `CalendarBrowser`；其餘表維持資料格 |
+| `scripts/smoke-test.mjs` | 批次 63 兩組回歸測試（真實 `clndr_data` 解析 ＋ UI 渲染＋palette 守門） |
+
+### 配色（Common Look and Feel，light-only）
+參考站用 slate/blue/rose/sky ✗（本專案禁用），改以調色盤 ＋ 透明度修飾：
+工作日 `bg-surface`／非工作日 `bg-surface-muted`＋`text-text-muted`／**假期 `bg-danger/10` ＋ `bg-danger` 圓點**／
+**工作例外 `bg-primary/10` ＋ `bg-primary` 圓點**／月外日期 `opacity-40`（與參考站一致 ✓）✓
+
+### 驗證（TDD：先 RED 再 GREEN）
+1. **RED**：兩項檢查皆 `Failed to load url /src/lib/calendarView.js` ✓（其餘 107 OK）
+2. 過程中修正兩條**測試期望寫錯**：`40329` 實為 `2010-05-31`（非 06-30）；7 日曆的週六本來就是工作日，非工作日必須用 6 日曆的**週日**（2010-01-03）驗證 ✓
+3. **GREEN**：**109 OK / 0 FAILED**（107 ＋ 新增 2）、`eslint` 0 error、`vite build` exit 0 ✓
+4. 真實檔端對端：5 個日曆 → 卡片統計全部正確、January 2010 假期清單 ✓
+
+**RTM（批次 63）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-6301 | CALENDAR 以卡片清單呈現（名稱／Default／類型／h/day／work days/wk／holidays）＋篩選 | `CalendarBrowser` | 使用者要求對齊 xerviewer.org | Complete |
+| FR-6302 | 點卡片顯示週工時、可導覽月曆（工作日／非工作日／假期／工作例外）與該月例外清單 | `CalendarDialog` ＋ `monthGrid` | 同上 | Complete |
+| FR-6303 | 必須解析 `clndr_data`（1=週日、Exceptions 為 P6 序號、帶時段者為工作例外） | `calendarView.js` | 忠實呈現 P6 資料 | Complete |
+| NFR-6301 | 僅用 CLF 調色盤（禁用 slate/blue/gray/`dark:`） | `STATUS_STYLES`／palette 守門 | Common Look and Feel | Verified |
+| AC-6301 | 真實檔 5 個日曆：7×10h／24 假期、6 日／126 假日、Sun 休息、January 2010 假期 | 實機量測（2026-09-22） | — | Verified |
+| AC-6302 | 煙霧測試 109 OK / 0 FAILED、eslint 0 error、build exit 0 | 量測（2026-09-22） | — | Verified |
+
+---
+
+## 🌐 批次 64（2026-09-22）— 前後端重啟 ＋ 前端全面英文化
+
+### 使用者需求
+1. 重啟所有啟動中的前後端
+2. 檢查完整前端內容，所有使用中文的內容改為英文顯示
+
+### 1. 服務重啟（依 AGENTS.md：一律用腳本，不直接跑 uvicorn/vite）
+```
+scripts\stop-all.bat   →  killing frontend PID 30776 on port 15156
+                          killing backend  PID 10816 on port 25156
+scripts\start-all.bat  （NO_BROWSER=1；腳本自行讀 .env 的 15156 / 25156）
+驗證：http://localhost:15156/ 200、/data-explorer 200、http://localhost:25156/health 200
+```
+
+### 2. 中文盤點（先量測，後動手）
+| 項目 | 數量 |
+|---|---|
+| 含中文的檔案 | 17 |
+| 可見文字行（strings / JSX） | 64 |
+| 註解行 | 11 |
+| 唯一中文詞 | 109 |
+| 後端 `backend/` 含中文行 | **0**（無需處理 ✓） |
+
+**關鍵辨識**：`繚`（U+7E5A）不是中文 ✗ — 它是 `•`／`·` 分隔符被錯誤編碼後的 mojibake ✓
+（出現在 `Excel 繚 XER 繚 XML …` 這類字串 ✓）→ 統一修回 `·`（11 處 / 4 檔 ✓）。
+
+### 3. 翻譯
+| 檔案 | 內容 |
+|---|---|
+| `ProjectBar.jsx` | 21 處：錯誤訊息、`alert`、按鈕（Upload／Save）、tooltip、`New project name…`、`No projects yet`、`N versions`、`Delete project` |
+| `GanttInfoPanel.jsx` | 5 處提示（資源指派／活動代碼／NOTEBOOK／未選活動） |
+| `LocalOcrSettings.jsx` | OCR 狀態字串（模型數、每頁秒數） |
+| `ExportDialog.jsx` | PDF 標記說明 ＋ `·` 分隔符 |
+| `WbsSettingsPanel.jsx` | WBS 層級摘要 → `WBS levels: 3 (L1 184 · L2 4 · L3 3 groups) · showing 191 group headings` |
+| `GlobalSettingsPanel.jsx` | `Drag to resize` |
+| `hkWorkingDays.js` | 假期來源 → `Labour Department website (updated …)`（日期改 `en-GB`）、`Local backup data` |
+| `localApi.js` | `BACKEND_HINT` 全英文 ＋ `isBackendDown()` 改比對英文訊息 |
+| `CompareDialog.jsx`／`SnapshotManager.jsx`／`UnifiedGanttLayout.jsx` | `繚` → `·` |
+| 註解英文化 | `ImportStatusPanel`／`XerMappingDialog`／`ProjectBar`／`localOcr`／`wbsLevel`／`ImageImportDialog`／`BulkEditBar`（色名） |
+
+**刻意保留中文（非顯示、純功能）**：`ImageImportDialog.jsx` 14 行與 `wbsLevel.js` 1 行的**正則**含中文 ✓ —
+用於**辨識**匯入圖面的中文欄名（開始／結束／完成／工序／工程／項目／活動／內容／事項／代號／代碼／編號／序號）
+與中文 WBS 代碼（`第1章` 樣式）；改了會讓中文來源的圖面無法匯入 ✗，且這些字串**永不顯示** ✓。
+
+### 4. 驗證
+```
+中文掃描（批次前）：17 檔 / 64 可見行 / 11 註解行
+中文掃描（批次後）：15 行、全部為 CODE 且位於正則內；註解 0、顯示文字 0
+煙霧測試：110 OK / 0 faults（新增批次 64 守門測試）
+ESLint 0 error ／ vite build exit 0
+服務：/ 200、/data-explorer 200、/health 200；後端 0 處中文
+```
+
+**RTM（批次 64）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-6401 | 前端所有顯示文字必須為英文（JSX、字串、tooltip、`alert`、`placeholder`、狀態列） | 17 個前端檔案 | 使用者要求「所有使用中文的內容改為英文顯示」 | Complete |
+| FR-6402 | 程式註解同步英文化（避免混語） | 同上（7 檔） | 同上 | Complete |
+| FR-6403 | 前後端服務必須以腳本重啟並確認可用 | `scripts\stop-all.bat`／`start-all.bat` | 使用者要求重啟 | Verified |
+| NFR-6401 | 辨識用正則（中文欄名／中文 WBS 代碼）不得改動，且永不顯示 | `ImageImportDialog.jsx`／`wbsLevel.js` | 功能不得退化 | Verified |
+| NFR-6402 | 以自動掃描守門，防止中文再次進入顯示文字 | 煙霧測試批次 64 | 長期一致性 | Verified |
+| AC-6401 | 掃描結果：顯示文字 0、註解 0、僅 15 行功能正則含中文 | 量測（2026-09-22） | — | Verified |
+| AC-6402 | 煙霧測試 110 OK / 0 faults、eslint 0 error、build exit 0、三個端點 200 | 量測（2026-09-22） | — | Verified |
+
+---
+
+## 📦 批次 65（2026-09-22）— 重新打包 exe（含 Calendars ＋ 英文介面）並驗證「可直接轉發到其他電腦」
+
+### 使用者需求
+1. 更新 exe 程式
+2. 確保該 exe 可以直接轉發到其他電腦上直接啟用
+
+### 1. 重新打包
+```
+1) 前端重建（含批次 63 Calendars ＋ 批次 64 英文介面）
+   vite build → exit 0；dist = 13.9 MB / 10 files
+   靜態檢查：No projects yet ✓、Filter calendars ✓、Choose a project ✓、WBS levels: ✓
+2) PyInstaller
+   首次失敗：PermissionError WinError 5（OneDrive 鎖住 desktop\build\p6reader\localpycs）
+   → 改以 OneDrive 之外的 workpath（%TEMP%\p6build65）打包，成功
+   → desktop\dist\P6ReaderConverter.exe（27.7 MB，16:15:36）
+```
+
+### 2. 可攜性驗證（模擬「複製到另一台電腦」）
+| 驗證 | 做法 | 結果 |
+|---|---|---|
+| 不依賴本 repo／工作目錄 | 把 exe 複製到 `%TEMP%\p6-transfer\`，以**該資料夾**為工作目錄啟動 | `UI bundle: bundled` ✓ |
+| 全新資料夾 | `--data-dir <scratch>\mydata`（全新） | `db\pyworkflow.db` 在該處建立 ✓ |
+| UI | `/` 200（1.5 KB index.html）、`/data-explorer` 200（SPA fallback） | ✓ |
+| 內建 UI 是**最新版** | 取 `assets/index-CBB2ERyV.js`（1.8 MB）檢查字串 | `No projects yet`／`Filter calendars`／`Choose a project`／`WBS levels:`／`Working exception` 皆 ✓；**中文 `建立專案失敗` 不存在 ✓** |
+| 資源 | `/fonts/NotoSansHK-VF.ttf` | 200、11.4 MB ✓ |
+| API 與寫入 | `POST /local-api/projects` → 再列出 | 建立成功、清單遞增 ✓ |
+| `--data-dir` 真的生效 | 比對兩顆 DB 內容 | scratch DB 3 筆（＝本次 POST）、`%LOCALAPPDATA%\P6ReaderConverter` 0 筆 ✓ |
+| 無本機綁定字串 | 掃描 exe 內容（Buffer 搜尋） | `ken.li` / `Vibe Code Challenge` / `OneDrive` / `C:\dev\paddle-ocr` 全部 **0** ✓ |
+
+### 3. 文件
+`doc/DESKTOP.md` 新增 **「Forward it to another computer」** 章節：單檔複製即可、系統需求
+（Windows 10/11 x64、`/api` 相關功能需連網、OCR 為外部工具、埠可自動退讓）、新機 30 秒自檢、
+SmartScreen 未簽章提醒、以及「連同專案一起搬」的做法（複製 `db` 資料夾 ＋ `--data-dir`）✓
+
+**RTM（批次 65）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-6501 | exe 必須重新打包，內含最新前端（Calendars 檢視 ＋ 全英文介面） | `scripts/build-exe.bat` ＋ `desktop/p6reader.spec` | 使用者要求更新 exe | Complete |
+| FR-6502 | exe 必須可單檔複製到其他電腦直接執行，不依賴本 repo／Python／Node | `desktop/app_launcher.py` | 使用者要求可直接轉發 | Verified |
+| FR-6503 | 資料必須落在使用者資料夾，且 `--data-dir` 可帶著專案一起搬 | `P6_DB_PATH` ＋ launcher | 同上 | Verified |
+| NFR-6501 | 打包流程不得被 OneDrive 檔案鎖阻斷 | build script 以 OneDrive 之外的 workpath | 可重複建置 | Complete |
+| NFR-6502 | exe 內不得含本機路徑／使用者名稱等功能性字串 | PyInstaller datas＝相對路徑 | 可攜性 | Verified |
+| AC-6501 | 複製到 scratch 資料夾、不同工作目錄啟動：UI／API／字型／寫入全部正常，內建 UI 為最新版 | 實機量測（2026-09-22） | — | Verified |
+| AC-6502 | 產物 27.7 MB；`--data-dir` 生效（scratch DB 有資料、預設資料夾 0 筆） | 實機量測（2026-09-22） | — | Verified |

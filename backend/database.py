@@ -7,9 +7,30 @@ from sqlalchemy.orm import DeclarativeBase
 
 load_dotenv(Path(__file__).parent / ".env", override=True)
 
-DB_DIR = Path(__file__).parent / "db"
-DB_PATH = DB_DIR / "pyworkflow.db"
-DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite+aiosqlite:///{DB_PATH}")
+
+def _sqlite_dir(url: str) -> Path | None:
+    """The folder holding the SQLite file this URL points at (None for other URLs)."""
+    prefix = "sqlite+aiosqlite:///"
+    if not url.startswith(prefix):
+        return None
+    raw = url[len(prefix):]
+    return Path(raw).expanduser().resolve().parent if raw else None
+
+
+# `P6_DB_PATH` is set by the packaged desktop build (desktop/app_launcher.py) and is the
+# one name dotenv cannot shadow, so a `.env` next to the code can never pull the database
+# out of the user's data folder. Without it the dev setup is unchanged (backend/db, or
+# whatever DATABASE_URL says).
+_p6_db_path = os.getenv("P6_DB_PATH", "").strip()
+if _p6_db_path:
+    DB_PATH = Path(_p6_db_path).expanduser().resolve()
+    DB_DIR = DB_PATH.parent
+    DATABASE_URL = f"sqlite+aiosqlite:///{DB_PATH.as_posix()}"
+else:
+    DB_DIR = Path(__file__).parent / "db"
+    DB_PATH = DB_DIR / "pyworkflow.db"
+    DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite+aiosqlite:///{DB_PATH}")
+    DB_DIR = _sqlite_dir(DATABASE_URL) or DB_DIR
 
 engine = create_async_engine(DATABASE_URL)
 AsyncSessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False)

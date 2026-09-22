@@ -3,7 +3,7 @@
  *
  * The app itself keeps talking to the Base44 cloud through `@/api/base44Client`
  * (LLM, functions, …). This client only serves the ProjectBar
- * (選擇專案 / 上傳 / 存檔), which stores projects and versions in the LOCAL
+ * (choose project / upload / save), which stores projects and versions in the LOCAL
  * FastAPI backend (backend/db/pyworkflow.db).
  *
  * Requests go to /local-api/... which the Vite dev server proxies to
@@ -14,8 +14,9 @@
 const API_BASE = "/local-api";
 
 export const BACKEND_HINT =
-  "本地後端未啟動 — 請在工作區根目錄（P6 Reader & Converter）執行 scripts\\start-backend.bat，" +
-  "或先 set START_BACKEND=1 再跑 scripts\\start-all.bat（此後端只用於「選擇專案／存檔」）";
+  "The local backend is not running — start it from the workspace root (P6 Reader & Converter) with " +
+  "scripts\\start-backend.bat, or run scripts\\start-all.bat with START_BACKEND=1 set " +
+  "(this backend only serves project storage / saving).";
 
 async function request(path, options = {}) {
   let res;
@@ -89,5 +90,5 @@ export const localApi = {
 
 /** True when the error looks like "the local backend is not running". */
 export function isBackendDown(err) {
-  return Boolean(err?.backendDown) || /本地後端未啟動/.test(String(err?.message || ""));
+  return Boolean(err?.backendDown) || /local backend is not running/i.test(String(err?.message || ""));
 }

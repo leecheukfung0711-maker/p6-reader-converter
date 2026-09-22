@@ -6,14 +6,14 @@ import { useState } from "react";
 import { X, Link2, Trash2, Palette, TrendingUp } from "lucide-react";
 
 const DEFAULT_COLORS = [
-  "#005a53", // 預設藍色
-  "#e88219", // 綠色
-  "#dc3545", // 紅色
-  "#e88219", // 橙色
-  "#b15315", // 紫色
-  "#003531", // 青色
-  "#333333", // 深灰
-  "#b15315", // 淺橙
+  "#005a53", // default blue
+  "#e88219", // green
+  "#dc3545", // red
+  "#e88219", // orange
+  "#b15315", // purple
+  "#003531", // teal
+  "#333333", // dark grey
+  "#b15315", // light orange
 ];
 
 export default function BulkEditBar({ selectedCount, onApply, onClear, bindChainMode, setBindChainMode, staircaseFilter, selectedIds }) {

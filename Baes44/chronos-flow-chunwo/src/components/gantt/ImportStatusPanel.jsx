@@ -1,12 +1,12 @@
 /**
- * ImportStatusPanel — 匯入狀態檢視浮動面板
- * 顯示最近一次匯入（XER/PLF）的欄位完整性報告
+ * ImportStatusPanel — floating panel with the import status report
+ * Shows the field-completeness report of the most recent import (XER/PLF)
  */
 import { useState } from "react";
 import { CheckCircle, AlertCircle, XCircle, X, ChevronDown, ChevronUp } from "lucide-react";
 import { levelStatsLabel } from "@/lib/wbsLevel";
 
-// 所有已知欄位定義，key = task 屬性，label = 顯示名稱
+// Every field the panel can report: key = task property, label = display name
 const FIELD_DEFS = [
   { key: "activityId",     label: "Activity ID",        critical: true  },
   { key: "activity",       label: "Activity Name",       critical: true  },

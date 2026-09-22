@@ -114,7 +114,7 @@ export default function LocalOcrSettings() {
             : status == null
               ? "checking…"
               : status.available
-                ? `ready — ${status.engine}${status.version ? " " + status.version : ""}${status.models?.length ? `（${status.models.length} 個模型${settings.engine === "ollama" && !settings.model ? "，請選一個" : ""}）` : ""}${settings.engine === "ppocr" ? "（每頁約 35 秒）" : ""}`
+                ? `ready — ${status.engine}${status.version ? " " + status.version : ""}${status.models?.length ? ` (${status.models.length} model${status.models.length === 1 ? "" : "s"}${settings.engine === "ollama" && !settings.model ? ", pick one" : ""})` : ""}${settings.engine === "ppocr" ? " (about 35 s per page)" : ""}`
                 : `not reachable — ${status.hint || engine.hint}`}
         {settings.enabled && !busy && status && !status.available && status.canAutoStart !== false && (
           <button

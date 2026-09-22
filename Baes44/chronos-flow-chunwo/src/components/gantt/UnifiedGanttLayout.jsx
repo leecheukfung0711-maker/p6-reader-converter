@@ -1449,7 +1449,7 @@ Return an array of internal keys (right side of →) in LEFT-TO-RIGHT order.`,
               <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/>
               </svg>
-              <span style={{ fontSize:12, fontWeight:600, textAlign:"center", lineHeight:1.5 }}>Drop a file here to import<br/><span style={{ fontSize:11, fontWeight:400, color:"#cecece" }}>PDF 繚 Excel 繚 XER 繚 Image</span></span>
+              <span style={{ fontSize:12, fontWeight:600, textAlign:"center", lineHeight:1.5 }}>Drop a file here to import<br/><span style={{ fontSize:11, fontWeight:400, color:"#cecece" }}>PDF · Excel · XER · Image</span></span>
             </div>
           )}
           {displayTasks.map((task, idx) => {

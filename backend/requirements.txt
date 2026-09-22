@@ -6,3 +6,6 @@ pydantic
 python-dotenv
 openpyxl
 python-multipart
+# Desktop build: the packaged .exe has no Vite proxy, so the server proxies /api/* to
+# the Base44 cloud itself (backend/desktop_server.py).
+httpx

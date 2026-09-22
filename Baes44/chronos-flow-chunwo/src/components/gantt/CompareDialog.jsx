@@ -912,7 +912,7 @@ Return the match list as JSON.`,
                               </div>
                               <div className="text-center">
                                 <div className="text-sm font-semibold text-text">Upload File or Paste (Ctrl+V)</div>
-                                <div className="text-xs text-text-muted mt-0.5">Excel 繚 XER 繚 XML 繚 PDF 繚 Image</div>
+                                <div className="text-xs text-text-muted mt-0.5">Excel · XER · XML · PDF · Image</div>
                               </div>
                             </>
                           )}

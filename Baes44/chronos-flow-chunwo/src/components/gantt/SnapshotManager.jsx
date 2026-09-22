@@ -130,9 +130,9 @@ export default function SnapshotManager({ tasks, columnVisibility, cw, onRestore
                     <div className="flex items-center gap-1 text-xs text-text-muted mt-0.5">
                       <Clock size={10} />
                       {new Date(snap.savedAt).toLocaleString("en-GB", { hour12: false })}
-                      <span className="ml-1 text-text-muted">繚</span>
+                      <span className="ml-1 text-text-muted">·</span>
                       <span>{snap.tasks.filter(t => !t.isSection).length} tasks</span>
-                      {snap.columnVisibility && <span className="ml-1 text-text-muted">繚</span>}
+                      {snap.columnVisibility && <span className="ml-1 text-text-muted">·</span>}
                       {snap.columnVisibility && <span title="Layout saved">📐</span>}
                     </div>
                   </div>

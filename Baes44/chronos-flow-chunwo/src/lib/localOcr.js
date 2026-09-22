@@ -420,7 +420,7 @@ export function buildRecoveryPrompt({ pageLabel, missingIds, localText, maxChars
 }
 
 /**
- * Splice recovered rows back where they belong (batch 25: "插回原本位置").
+ * Splice recovered rows back where they belong (batch 25: "put them back in place").
  *
  * The base order is preserved. Walking the recovered list in order:
  *   · an ID the page already has becomes an anchor (fills fields the row left empty);

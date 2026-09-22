@@ -24,3 +24,8 @@ __pycache__/
 # Python lint cache
 .ruff_cache/
 
+# Desktop build output (scripts/build-exe.bat) — publish the .exe as a release asset,
+# never commit a ~60 MB binary.
+/desktop/build/
+/desktop/dist/
+

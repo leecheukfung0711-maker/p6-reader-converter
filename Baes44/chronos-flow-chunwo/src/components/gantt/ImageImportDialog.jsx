@@ -1069,7 +1069,7 @@ const GANTT_VISION_TASK_SCHEMA = {
  * Extra rules for the VISION calls only (scanned pages / images carry WBS bands
  * the model can see). Verified on a real programme page: adding these two fields
  * keeps the row count flat (41 rows at 16, 17 and 18 fields — see
- * doc/requirements.md § 批次 23B 前期實測).
+ * doc/requirements.md § batch 23B measurements).
  */
 const GANTT_VISION_PROMPT_SUFFIX = `\n\nWBS LEVELS — IMPORTANT (SECTION HEADERS ONLY):\n- Set section_level to the nesting depth visible on the chart: 1 = top programme band, 2 = a sub-band inside it, 3 = deeper, and so on.\n- Decide from, in this order: (a) the leading WBS numbering in the title ("1.0" -> 1, "1.1" -> 2, "1.1.1" -> 3), (b) the text indentation of the row, (c) the row's background colour band (darker / more saturated bands are usually the higher levels).\n- Also set section_color for EVERY section header: the background colour of that row as you actually see it (e.g. "light grey", "light blue", "#d9d9d9").\n- If you cannot tell, omit section_level / section_color — NEVER guess.`;
 

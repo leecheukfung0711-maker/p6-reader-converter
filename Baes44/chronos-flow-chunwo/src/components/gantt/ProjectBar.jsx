@@ -14,7 +14,7 @@ import { parseExcelFile, parseXERFile, parseXMLFile } from "@/components/gantt/I
  * (same UI, labels and behaviour) with two differences for this app:
  *   * it talks to /local-api (this app's Vite proxy to the local backend) —
  *     /api belongs to the Base44 cloud proxy here;
- *   * 上傳 parses the file IN THE BROWSER by default, with this app's own
+ *   * Upload parses the file IN THE BROWSER by default, with this app's own
  *     parsers, so the imported tasks match the Import dialog exactly (including
  *     the raw XER tables that make lossless XER → XER export possible).
  *     Set SERVER_PARSE_ON_UPLOAD = true to let the backend parse instead
@@ -48,7 +48,7 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
       setError("");
     } catch (e) {
       console.error("Failed to load projects:", e);
-      setError(isBackendDown(e) ? BACKEND_HINT : `載入專案失敗：${e.message}`);
+      setError(isBackendDown(e) ? BACKEND_HINT : `Could not load projects: ${e.message}`);
     } finally {
       setLoading(false);
     }
@@ -68,7 +68,7 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
       if (onProjectLoaded) onProjectLoaded(project, null, null, null);
     } catch (e) {
       console.error("Failed to create project:", e);
-      setError(isBackendDown(e) ? BACKEND_HINT : `建立專案失敗：${e.message}`);
+      setError(isBackendDown(e) ? BACKEND_HINT : `Could not create the project: ${e.message}`);
     }
   };
 
@@ -81,7 +81,7 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
       setError("");
     } catch (e) {
       console.error("Failed to load project:", e);
-      setError(isBackendDown(e) ? BACKEND_HINT : `載入專案失敗：${e.message}`);
+      setError(isBackendDown(e) ? BACKEND_HINT : `Could not load the project: ${e.message}`);
     }
   };
 
@@ -93,7 +93,7 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
       await refresh();
     } catch (e) {
       console.error("Failed to delete project:", e);
-      setError(isBackendDown(e) ? BACKEND_HINT : `刪除專案失敗：${e.message}`);
+      setError(isBackendDown(e) ? BACKEND_HINT : `Could not delete the project: ${e.message}`);
     }
   };
 
@@ -117,7 +117,7 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
       const parsedTasks = (await parseExcelFile(file)) || [];
       return { tasks: parsedTasks, xerTables: null, format: ext === "csv" ? "csv" : "xlsx", text: null };
     }
-    throw new Error(`不支援的檔案類型 .${ext}（可用 .xer / .xml / .xlsx / .xls / .csv）`);
+    throw new Error(`Unsupported file type ".${ext}" — use .xer / .xml / .xlsx / .xls / .csv`);
   };
 
   const handleUpload = async (e) => {
@@ -125,7 +125,7 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
     e.target.value = "";
     if (!file) return;
     if (!currentProjectId) {
-      alert("請先建立或選擇一個專案，再上傳 programme 檔案。");
+      alert("Create or pick a project before uploading a programme file.");
       return;
     }
     setSaving(true);
@@ -139,7 +139,7 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
       } else {
         // Default path: parse in the browser, then store the result as a version.
         const { tasks: parsedTasks, xerTables, format, text: fileText } = await parseFileInBrowser(file);
-        if (!parsedTasks.length) throw new Error("檔案中找不到任何 activity。");
+        if (!parsedTasks.length) throw new Error("No activities found in the file.");
         const payload = {
           tasks: parsedTasks,
           meta: {
@@ -166,7 +166,7 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
       }
     } catch (err) {
       console.error("Import failed:", err);
-      alert(`匯入失敗: ${err.message}`);
+      alert(`Import failed: ${err.message}`);
     } finally {
       setSaving(false);
     }
@@ -174,7 +174,7 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
 
   const handleSave = async () => {
     if (!currentProjectId) {
-      alert("請先選擇專案。");
+      alert("Pick a project first.");
       return;
     }
     setSaving(true);
@@ -203,7 +203,7 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
       await refresh();
     } catch (e) {
       console.error("Failed to save version:", e);
-      setError(isBackendDown(e) ? BACKEND_HINT : `存檔失敗：${e.message}`);
+      setError(isBackendDown(e) ? BACKEND_HINT : `Could not save the version: ${e.message}`);
     } finally {
       setSaving(false);
     }
@@ -216,10 +216,10 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
       <button
         onClick={() => setMenuOpen(v => !v)}
         className="px-2.5 py-1 rounded-md bg-primary-active/60 hover:bg-primary-active text-surface text-xs font-medium flex items-center gap-1.5"
-        title="專案管理"
+        title="Projects"
       >
         <FolderOpen size={13} />
-        <span className="max-w-[220px] truncate" title={current?.name || "選擇專案"}>{current?.name || "選擇專案"}</span>
+        <span className="max-w-[220px] truncate" title={current?.name || "Choose a project"}>{current?.name || "Choose a project"}</span>
         <RefreshCw size={11} className={loading ? "animate-spin" : "opacity-50"} />
       </button>
 
@@ -227,10 +227,10 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
         onClick={() => fileRef.current?.click()}
         disabled={saving}
         className="px-2.5 py-1 rounded-md bg-primary-active/60 hover:bg-primary-active text-surface text-xs font-medium flex items-center gap-1.5"
-        title="上傳 programme 檔案 (.xer/.xml/.xlsx/.csv) 並解析"
+        title="Upload and parse a programme file (.xer/.xml/.xlsx/.csv)"
       >
         {saving ? <RefreshCw size={13} className="animate-spin" /> : <Upload size={13} />}
-        上傳
+        Upload
       </button>
       <input ref={fileRef} type="file" accept=".xer,.xml,.xlsx,.xls,.csv" className="hidden" onChange={handleUpload} />
 
@@ -238,10 +238,10 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
         onClick={handleSave}
         disabled={saving}
         className="px-2.5 py-1 rounded-md bg-primary-active/60 hover:bg-primary-active text-surface text-xs font-medium flex items-center gap-1.5"
-        title="儲存目前進度為新版本（由甘特圖頁面提供 tasks）"
+        title="Save the current state as a new version (the tasks come from the Gantt page)"
       >
         <Save size={13} />
-        存檔
+        Save
       </button>
       {savedTip && <Check size={14} className="text-surface" />}
 
@@ -252,16 +252,16 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
               value={newName}
               onChange={e => setNewName(e.target.value)}
               onKeyDown={e => e.key === "Enter" && handleCreate()}
-              placeholder="新增專案名稱…"
+              placeholder="New project name…"
               className="flex-1 text-xs text-text border border-border rounded px-2 py-1 outline-none focus:border-primary"
             />
-            <button onClick={handleCreate} className="p-1 rounded bg-primary text-surface hover:bg-primary-active" title="建立專案">
+            <button onClick={handleCreate} className="p-1 rounded bg-primary text-surface hover:bg-primary-active" title="Create project">
               <Plus size={13} />
             </button>
           </div>
           <div className="max-h-64 overflow-y-auto divide-y divide-border">
             {projects.length === 0 && (
-              <div className="text-xs text-text-muted text-center py-3">尚無專案</div>
+              <div className="text-xs text-text-muted text-center py-3">No projects yet</div>
             )}
             {projects.map(p => (
               <div key={p.id} className="flex items-center gap-1 py-1">
@@ -273,13 +273,13 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, l
                 >
                   <span className="block break-words">{p.name}</span>
                   <span className="block text-[10px] text-text-muted">
-                    {p.source_format || "—"} · {p.version_count} 版本
+                    {p.source_format || "—"} · {p.version_count} version{p.version_count === 1 ? "" : "s"}
                   </span>
                 </button>
                 <button
                   onClick={() => handleDelete(p.id, p.name)}
                   className="p-1 text-text-muted hover:text-danger rounded"
-                  title="刪除專案"
+                  title="Delete project"
                 >
                   <Trash2 size={12} />
                 </button>

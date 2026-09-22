@@ -16,6 +16,9 @@ dependencies = [
     # Required by FastAPI for the multipart endpoints (Form / UploadFile) used by
     # POST /projects and POST /projects/{id}/import.
     "python-multipart>=0.0.9",
+    # The packaged desktop build has no Vite proxy, so the server proxies /api/* to
+    # the Base44 cloud itself (backend/desktop_server.py, desktop/app_launcher.py).
+    "httpx>=0.27.0",
 ]
 
 [build-system]

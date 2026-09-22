@@ -203,7 +203,7 @@ export function getHolidaysInRange(startStr, endStr) {
 export function getHolidaySourceInfo() {
   if (_dynamicHolidays) {
     const d = new Date(_lastFetchTime);
-    return `勞工處網站 (更新於 ${d.toLocaleDateString("zh-HK")})`;
+    return `Labour Department website (updated ${d.toLocaleDateString("en-GB")})`;
   }
-  return "本地備份資料";
+  return "Local backup data";
 }

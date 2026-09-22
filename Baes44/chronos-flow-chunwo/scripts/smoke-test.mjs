@@ -276,7 +276,7 @@ try {
   results.push([
     "Customise Grouping level options + inventory (data-driven, xerviewer parity)",
     ok
-      ? `OK (flat: 3 層 → ${values(3)}，群組 191/184/188；nested: 4 層 → ${values(4)}；無階層 → ${plain.maxLevel} 層)`
+      ? `OK (flat: 3 levels → ${values(3)}, groups 191/184/188; nested: 4 levels → ${values(4)}; no levels → ${plain.maxLevel} level)`
       : `UNEXPECTED (flat max=${flat.maxLevel} opts=${values(3)} groups=${wbsVisibleGroupCount(flat.counts, "all")}/${wbsVisibleGroupCount(flat.counts, 1)}/${wbsVisibleGroupCount(flat.counts, 2)}; nested max=${nested.maxLevel} opts=${values(4)})`,
   ]);
 } catch (e) {
@@ -292,7 +292,7 @@ try {
     onChange: () => {}, onClose: () => {},
     wbsLevels: { counts: { 1: 184, 2: 4, 3: 3 }, maxLevel: 3, levelList: [1, 2, 3] },
   })).replace(/<!--[^>]*-->/g, "");
-  const markers = ["Customise Grouping", "Level 3", "WBS 層級：3 層", "L1 184", "L3 3", "目前顯示 191 個群組標題"];
+  const markers = ["Customise Grouping", "Level 3", "WBS levels: 3", "L1 184", "L3 3", "showing 191 group headings"];
   const missing = markers.filter(m => !html.includes(m));
   results.push([
     "WbsSettingsPanel grouping inventory (levels present in the file)",
@@ -3174,6 +3174,162 @@ try {
   ]);
 } catch (e) {
   results.push(["The Explorer opens on PROJECT by default (batch 61)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
+// ── Batch 63 — Calendars view (cards + week pattern + month calendar) ──────────
+// Modelled on xerviewer.org's Calendars: the CALENDAR table is shown as cards and a
+// card opens the calendar's week pattern, a navigable month calendar and the list of
+// exceptions (holidays). The P6 definition lives in one column, `clndr_data`:
+//   (0||CalendarData()( (0||DaysOfWeek()( (0||1()( (0||0(s|07:00|f|17:00)()) ) … ))
+//   (0||Exceptions()( (0||0(d|40179)()) … ) ))         ← 1 = Sunday … 7 = Saturday
+// The fixtures below are the real strings from 6WSD21-DP_202409.xer.
+try {
+  const { readFileSync } = await import("node:fs");
+  const React = (await import("react")).default;
+  const { renderToString } = await import("react-dom/server");
+  const lib = await server.ssrLoadModule("/src/lib/calendarView.js");
+
+  const SEVEN_DAY = "(0||CalendarData()(  (0||DaysOfWeek()(    (0||1()(      (0||0(s|07:00|f|17:00)())))    (0||2()(      (0||0(s|07:00|f|17:00)())))    (0||3()(      (0||0(s|07:00|f|17:00)())))    (0||4()(      (0||0(s|07:00|f|17:00)())))    (0||5()(      (0||0(s|07:00|f|17:00)())))    (0||6()(      (0||0(s|07:00|f|17:00)())))    (0||7()(      (0||0(s|07:00|f|17:00)())))))  (0||VIEW(ShowTotal|Y)())  (0||Exceptions()(    (0||0(d|40179)())    (0||1(d|40329)())    (0||2(d|40364)())    (0||3(d|40427)())    (0||4(d|40507)())    (0||5(d|40536)())    (0||6(d|40543)())    (0||7(d|40693)())    (0||8(d|40728)())    (0||9(d|40791)())    (0||10(d|40871)())    (0||11(d|40903)())    (0||12(d|40910)())    (0||13(d|41057)())    (0||14(d|41094)())    (0||15(d|41155)())    (0||16(d|41235)())    (0||17(d|41268)())    (0||18(d|41275)())    (0||19(d|41421)())    (0||20(d|41459)())    (0||21(d|41519)())    (0||22(d|41606)())    (0||23(d|41633)()))))";
+  const SIX_DAY = "(0||CalendarData()(  (0||DaysOfWeek()(    (0||1()())    (0||2()(      (0||0(s|07:00|f|17:00)())))    (0||3()(      (0||0(s|07:00|f|17:00)())))    (0||4()(      (0||0(s|07:00|f|17:00)())))    (0||5()(      (0||0(s|07:00|f|17:00)())))    (0||6()(      (0||0(s|07:00|f|17:00)())))    (0||7()(      (0||0(s|07:00|f|17:00)()))))  ) (0||Exceptions()(  ) ))";
+  const WORKEX = "(0||CalendarData()(  (0||DaysOfWeek()(    (0||1()())))  (0||Exceptions()(    (0||0(d|40180)(      (0||0(s|08:00|f|12:00)())))))";
+
+  const sevenRow = { clndr_id: "6591", default_flag: "N", clndr_name: "7d/w x10", clndr_type: "CA_Base", day_hr_cnt: "10", week_hr_cnt: "70", clndr_data: SEVEN_DAY };
+  const sixRow = { clndr_id: "6797", default_flag: "N", clndr_name: "Working Day(6d/week)-updated", clndr_type: "CA_Project", day_hr_cnt: "10", week_hr_cnt: "60", clndr_data: SIX_DAY };
+
+  const week7 = lib.workWeekFromClndrData(SEVEN_DAY);
+  const week6 = lib.workWeekFromClndrData(SIX_DAY);
+  const weekOk = week7.length === 7 && week7.every((d) => d.working && d.hours === 10 && d.periods[0].start === "07:00")
+    && week6[0].working === false && week6[0].hours === 0 && week6.slice(1).every((d) => d.working && d.hours === 10)
+    && lib.workWeekFromClndrData("").every((d) => d.working === false);
+
+  const serialOk = lib.p6SerialToISO(40179) === "2010-01-01" && lib.p6SerialToISO(40329) === "2010-05-31"
+    && lib.p6SerialToISO(0) === "" && lib.p6SerialToISO("x") === "";
+
+  const ex = lib.exceptionsFromClndrData(SEVEN_DAY);
+  const exOk = ex.length === 24 && ex[0].iso === "2010-01-01" && ex[0].working === false
+    && lib.exceptionsFromClndrData(SIX_DAY).length === 0
+    && lib.exceptionsFromClndrData("").length === 0;
+
+  const sum7 = lib.calendarSummary(sevenRow);
+  const sum6 = lib.calendarSummary(sixRow);
+  const summaryOk = sum7.name === "7d/w x10" && sum7.typeLabel === "Base" && sum7.type === "CA_Base"
+    && sum7.hoursPerDay === 10 && sum7.hoursPerWeek === 70 && sum7.workDaysPerWeek === 7
+    && sum7.exceptionCount === 24 && sum7.isDefault === false
+    && sum7.subtitle === "CA_Base · 10 h/day · 70h/week · 24 exceptions"
+    && sum6.workDaysPerWeek === 6 && sum6.exceptionCount === 0
+    && lib.calendarSummary({ default_flag: "Y", clndr_name: "X" }).isDefault === true;
+
+  const grid = lib.monthGrid(2010, 0, week7, ex);
+  const grid6 = lib.monthGrid(2010, 0, week6, ex);
+  const cell = (iso) => grid.weeks.flat().find((c) => c.iso === iso);
+  const gridOk = grid.weeks.length >= 5 && grid.weeks.every((w) => w.length === 7)
+    && grid.label === "January 2010" && grid.weeks[0][0].iso === "2009-12-27"
+    && cell("2010-01-01").status === "holiday" && cell("2010-01-02").status === "working"
+    && cell("2010-01-04").status === "working" && cell("2010-01-04").hours === 10
+    && cell("2010-01-04").label === "Working day · 10h"
+    && grid6.weeks.flat().find((c) => c.iso === "2010-01-03").status === "nonworking"
+    && grid6.weeks.flat().find((c) => c.iso === "2010-01-03").label === "Non-working day"
+    && cell("2009-12-27").inMonth === false && cell("2010-01-01").inMonth === true;
+  const janEx = lib.exceptionsInMonth(ex, 2010, 0);
+  const listOk = janEx.length === 1 && janEx[0].iso === "2010-01-01" && janEx[0].note === "Non-working (holiday)"
+    && lib.exceptionsInMonth(ex, 2010, 1).length === 0
+    && lib.monthLabel(2010, 0) === "January 2010" && lib.monthLabel(2010, 11) === "December 2010";
+
+  const wex = lib.exceptionsFromClndrData(WORKEX);
+  const workExOk = wex.length === 1 && wex[0].working === true && wex[0].hours === 4
+    && lib.monthGrid(2010, 0, week7, wex).weeks.flat().find((c) => c.iso === "2010-01-02").status === "exception";
+
+  results.push([
+    "Calendars view — P6 clndr_data parsed (batch 63)",
+    weekOk && serialOk && exOk && summaryOk && gridOk && listOk && workExOk
+      ? "OK (7×10h and 6-day weeks from the real strings, P6 serial → 2010-01-01, 24 exceptions, January 2010 grid with holiday/non-working/working cells, working exception wins over the pattern)"
+      : `FAILED (week=${weekOk}, serial=${serialOk}, exceptions=${exOk}, summary=${summaryOk}, grid=${gridOk}, list=${listOk}, workEx=${workExOk})`,
+  ]);
+} catch (e) {
+  results.push(["Calendars view — P6 clndr_data parsed (batch 63)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
+// ── Batch 63b — the Calendars UI itself (cards + dialog) ──────────────────────
+try {
+  const { readFileSync } = await import("node:fs");
+  const lib = await server.ssrLoadModule("/src/lib/calendarView.js");
+  const { default: CalendarBrowser, CalendarDialog } = await server.ssrLoadModule("/src/components/dataexplorer/CalendarBrowser.jsx");
+
+  const SEVEN = "(0||CalendarData()(  (0||DaysOfWeek()(    (0||1()(      (0||0(s|07:00|f|17:00)())))))  (0||Exceptions()(    (0||0(d|40179)())    (0||1(d|40329)()))))";
+  const sum = lib.calendarSummary({ clndr_id: "6591", clndr_name: "7d/w x10", clndr_type: "CA_Base", day_hr_cnt: "10", week_hr_cnt: "70", clndr_data: SEVEN });
+  const proj = lib.calendarSummary({ clndr_id: "7234", default_flag: "Y", clndr_name: "Working Day(6d/week)", clndr_type: "CA_Project", day_hr_cnt: "10", week_hr_cnt: "60", clndr_data: "" });
+
+  const html = renderToString(React.createElement(CalendarBrowser, { calendars: [sum, proj], fileName: "a.xer" })).replace(/<!--[^>]*-->/g, "");
+  const cardOk = html.includes('data-calendar-count="2"') && html.includes('data-calendar-card="6591"')
+    && html.includes("7d/w x10") && html.includes("Filter calendars")
+    && html.includes(">10</span> h/day") && html.includes(">1</span> work days/wk") && html.includes(">2</span> holidays")
+    && html.includes(">Base<") && html.includes(">Project<") && html.includes(">Default<")
+    && !/dark:/.test(html) && !/(bg|text|border|ring)-(slate|blue|gray|zinc|neutral|stone)-\d/.test(html);
+
+  const dialog = renderToString(React.createElement(CalendarDialog, { calendar: sum, onClose: () => {} })).replace(/<!--[^>]*-->/g, "");
+  const dialogOk = dialog.includes("January 2010") && dialog.includes('data-day-status="holiday"')
+    && dialog.includes('data-day-status="working"') && dialog.includes('data-day-status="nonworking"')
+    && dialog.includes("Exceptions in January 2010") && dialog.includes("Non-working (holiday)")
+    && dialog.includes("Working exception") && dialog.includes("07:00–17:00") && dialog.includes("Sun")
+    && dialog.includes("1 h/week") === false && dialog.includes("CA_Base · 10 h/day · 70h/week · 2 exceptions")
+    && !/dark:/.test(dialog) && !/(bg|text|border|ring)-(slate|blue|gray|zinc|neutral|stone)-\d/.test(dialog);
+
+  const browser = readFileSync("src/components/dataexplorer/TableBrowser.jsx", "utf8");
+  const wiringOk = /CalendarBrowser/.test(browser) && /isCalendars/.test(browser) && /calendarsFromRows\(/.test(browser);
+
+  results.push([
+    "Calendars view — cards + detail dialog render (batch 63)",
+    cardOk && dialogOk && wiringOk
+      ? "OK (card grid with count/filter/type/stats/default badge, dialog with week strip, January 2010 month grid, legend, exception list; palette-safe; the browser routes CALENDAR to it)"
+      : `FAILED (cards=${cardOk}, dialog=${dialogOk}, wiring=${wiringOk})`,
+  ]);
+} catch (e) {
+  results.push(["Calendars view — cards + detail dialog render (batch 63)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
+// ── Batch 64 — every user-visible string is English ───────────────────────────
+// The whole frontend was translated from Chinese to English. The scan before the
+// batch found 17 files / 64 visible Chinese lines; afterwards only the two matching
+// regexes may keep Chinese, because they recognise Chinese column headers and WBS
+// codes in imported drawings (第1章 style) and are never displayed.
+try {
+  const { readFileSync, readdirSync } = await import("node:fs");
+  const CJK = /[\u3400-\u9FFF]/;
+  const ALLOWED = new Set([
+    "src/components/gantt/ImageImportDialog.jsx",   // header-detection regexes
+    "src/lib/wbsLevel.js",                          // WBS code regex
+  ]);
+  const offenders = [];
+
+  (function walk(dir) {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = `${dir}/${entry.name}`;
+      if (entry.isDirectory()) { walk(full); continue; }
+      if (!/\.(jsx?|tsx?)$/.test(entry.name)) continue;
+      readFileSync(full, "utf8").split(/\r?\n/).forEach((line, index) => {
+        if (!CJK.test(line)) return;
+        const trimmed = line.trim();
+        const isComment = trimmed.startsWith("//") || trimmed.startsWith("*") || trimmed.startsWith("/*");
+        if (isComment) { offenders.push(`${full}:${index + 1} (comment)`); return; }
+        if (ALLOWED.has(full)) {
+          // allowed only when the Chinese sits inside a /…/ literal
+          const first = line.search(CJK);
+          const inRegex = line.lastIndexOf("/", first) > 0 && line.indexOf("/", first) > first;
+          if (inRegex) return;
+        }
+        offenders.push(`${full}:${index + 1}`);
+      });
+    }
+  })("src");
+
+  results.push([
+    "Every user-visible string is English (batch 64)",
+    offenders.length === 0
+      ? "OK (no Chinese in JSX, strings or comments — only the allow-listed header/WBS matching regexes keep it, and those are never displayed)"
+      : `Chinese remains in ${offenders.length} place(s): ${offenders.slice(0, 6).join(", ")}${offenders.length > 6 ? " …" : ""}`,
+  ]);
+} catch (e) {
+  results.push(["Every user-visible string is English (batch 64)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
 }
 
 for (const [l, r] of results) console.log(`  ${l}: ${r}`);

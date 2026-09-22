@@ -1,5 +1,7 @@
 import { useMemo, useState } from "react";
 import { ChevronDown, ChevronRight, FileSpreadsheet, PanelLeftClose, PanelLeftOpen, Search, Table2 } from "lucide-react";
+import CalendarBrowser from "@/components/dataexplorer/CalendarBrowser";
+import { calendarsFromRows } from "@/lib/calendarView";
 import {
   buildTableIndex,
   defaultTableName,
@@ -48,6 +50,10 @@ export default function TableBrowser({ fileName = "", tables = {}, initialTable 
     : [];
   const record = single ? active.rows[0] : null;
   const cards = single ? propertyGroupsFor(fields) : [];
+  // Batch 63 — the CALENDAR table gets the Calendars view (cards + week pattern +
+  // month calendar) instead of the plain grid; every other table is unchanged.
+  const isCalendars = /^calendars?$/i.test(active.name);
+  const calendars = useMemo(() => (isCalendars ? calendarsFromRows(active.rows) : []), [isCalendars, active]);
 
   const toggleGroup = (id) => setCollapsed((prev) => {
     const next = new Set(prev);
@@ -235,6 +241,8 @@ export default function TableBrowser({ fileName = "", tables = {}, initialTable 
                 ))}
                 {cards.length === 0 && <p className="text-xs text-text-muted">No property matches this filter.</p>}
               </div>
+            ) : isCalendars ? (
+              <CalendarBrowser calendars={calendars} fileName={fileName} />
             ) : (
               <div className="bg-surface rounded-xl shadow-sm ring-1 ring-border overflow-hidden">
                 <div className="overflow-x-auto">

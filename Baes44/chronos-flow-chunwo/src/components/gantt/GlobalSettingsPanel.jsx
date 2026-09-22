@@ -214,7 +214,7 @@ export default function GlobalSettingsPanel({
         <div
           onMouseDown={() => { dragging.current = true; document.body.style.userSelect = "none"; }}
           className="absolute top-0 left-0 w-2 h-full cursor-ew-resize"
-          title="拖曳調整寬度"
+          title="Drag to resize"
         />
       </div>
     </div>

@@ -328,7 +328,7 @@ function ResourcesTab({ task }) {
     return (
       <EmptyState
         title="No resources assigned"
-        hint="此 programme 未帶入資源指派（P6 TASKKSRC / TASKRSRC）。XER 的 rsrc_id 有值時會顯示在這裡。"
+        hint="This programme carries no resource assignments (P6 TASKKSRC / TASKRSRC). They appear here once the XER has a value in rsrc_id."
       />
     );
   }
@@ -413,7 +413,7 @@ function CodesTab({ task }) {
     return (
       <EmptyState
         title="No activity codes"
-        hint="P6 活動代碼（ACTIVITYCODE / TASKACTV）未在 XER 匯入時解析，因此沒有代碼可顯示。"
+        hint="P6 activity codes (ACTIVITYCODE / TASKACTV) are not parsed when an XER is imported, so there is no code to show."
       />
     );
   }
@@ -426,7 +426,7 @@ function CodesTab({ task }) {
         <InfoRow label="Status code" value={task.statusCode} mono />
       </InfoCard>
       <p className="text-[10px] text-text-muted leading-relaxed px-1">
-        P6 活動代碼（ACTIVITYCODE / TASKACTV）與 UDF 未在 XER 匯入時解析；若需要顯示，請提供含代碼表的 XER。
+        P6 activity codes (ACTIVITYCODE / TASKACTV) and UDFs are not parsed when an XER is imported; supply an XER that contains the code tables if you need them here.
       </p>
     </div>
   );
@@ -436,7 +436,7 @@ function NotebookTab() {
   return (
     <EmptyState
       title="No notebook entries"
-      hint="P6 NOTEBOOK topics 未在 XER 匯入時解析，因此此活動沒有記事可顯示。"
+      hint="P6 NOTEBOOK topics are not parsed when an XER is imported, so this activity has no entries to show."
     />
   );
 }
@@ -538,7 +538,7 @@ export default function GanttInfoPanel({
   const active = TABS.find(t => t.key === tab) || TABS[0];
 
   let body;
-  if (!task) body = <EmptyState title="No activity selected" hint="在 Gantt 表格或圖表中點選一個活動，即可在此查看內容。" />;
+  if (!task) body = <EmptyState title="No activity selected" hint="Click an activity in the Gantt table or chart to see its details here." />;
   else if (tab === "general") body = <GeneralTab task={task} d={fmtDate} durationText={durationText} />;
   else if (tab === "status") body = <StatusTab task={task} d={fmtDate} rawDate={fmtDate} />;
   else if (tab === "resources") body = <ResourcesTab task={task} />;

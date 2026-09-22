@@ -57,7 +57,7 @@ export default function WbsSettingsPanel({ displaySettings, onChange, embedded =
   const totalGroups = wbsVisibleGroupCount(levelInfo.counts, "all");
   const visibleGroups = wbsVisibleGroupCount(levelInfo.counts, wbsRow?.toLevel);
   const hiddenGroups = Math.max(0, totalGroups - visibleGroups);
-  const levelSummary = `WBS 層級：${levelInfo.maxLevel} 層（${levelInfo.levelList.map(l => `L${l} ${levelInfo.counts[l]}`).join(" ／ ")} 個群組）・目前顯示 ${visibleGroups} 個群組標題${hiddenGroups > 0 ? `（隱藏 ${hiddenGroups} 個）` : ""}${levelInfo.maxLevel <= 1 ? "・此檔案 WBS 只有 1 層，Level 1 與 All Levels 相同" : ""}`;
+  const levelSummary = `WBS levels: ${levelInfo.maxLevel} (${levelInfo.levelList.map(l => `L${l} ${levelInfo.counts[l]}`).join(" · ")} groups) · showing ${visibleGroups} group heading${visibleGroups === 1 ? "" : "s"}${hiddenGroups > 0 ? ` (${hiddenGroups} hidden)` : ""}${levelInfo.maxLevel <= 1 ? " · this file has a single WBS level, so Level 1 and All Levels are identical" : ""}`;
 
   const selectScheme = (scheme) => {
     setWbs({ schemeId: scheme.id, levels: levelStylesFromScheme(scheme.id) });

@@ -1,7 +1,7 @@
 /**
- * XerMappingDialog — XER欄位對應設定
- * 讓用戶自訂Gantt欄位如何對應到P6 XER的task_code、task_name、
- * wbs_name、日期等核心欄位，並預覽前幾行的轉換結果。
+ * XerMappingDialog — XER field-mapping settings
+ * Lets the user map Gantt columns to the P6 XER fields (task_code, task_name,
+ * wbs_name, dates …) and previews how the first rows convert.
  */
 import { useState, useMemo } from "react";
 import { X, Settings2, Eye, RotateCcw, CheckCircle, AlertCircle, Info } from "lucide-react";
