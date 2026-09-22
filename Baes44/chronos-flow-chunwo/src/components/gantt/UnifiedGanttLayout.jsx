@@ -1987,6 +1987,16 @@ Return an array of internal keys (right side of →) in LEFT-TO-RIGHT order.`,
                   if (p) taskLookup[t.id] = { idx, pos: p, task: t };
                 });
 
+                // Batch 47 — clicking an activity temporarily emphasises the relationship
+                // lines that touch it and fades every other line. Display-only: it is
+                // derived from selectedIds, so clearing the selection restores the normal
+                // drawing and nothing is ever written to settings.
+                const activityIds = new Set(Object.keys(taskLookup).map(String));
+                const focusIds = new Set(
+                  Array.from(selectedIds || []).map(String).filter((id) => activityIds.has(id))
+                );
+                const hasFocus = focusIds.size > 0;
+
                 const REL_COLORS = { FS: "#005a53", SS: "#003531", FF: "#733208", SF: "#e88219" };
                 const arrows = [];
                 const seen = new Set();
@@ -2032,11 +2042,18 @@ Return an array of internal keys (right side of →) in LEFT-TO-RIGHT order.`,
                       ? `${endX},${succY} ${endX - aSize},${succY - aSize/2} ${endX - aSize},${succY + aSize/2}`
                       : `${endX},${succY} ${endX + aSize},${succY - aSize/2} ${endX + aSize},${succY + aSize/2}`;
 
+                    const relState = !hasFocus ? "normal"
+                      : (focusIds.has(String(task.id)) || focusIds.has(String(r.succId))) ? "focus" : "dim";
+                    const isFocused = relState === "focus";
+                    const isDimmed = relState === "dim";
+
                     arrows.push(
-                      <g key={`rel-${key}`}>
-                        <polyline points={pts} fill="none" stroke={color} strokeWidth="1.2" opacity="0.6" />
-                        <polygon points={ah} fill={color} opacity="0.6" />
-                        <text x={elbowX + 2} y={(predY + succY) / 2 + 3} fill={color} fontSize="7" opacity="0.65" fontFamily="sans-serif">{type}</text>
+                      <g key={`rel-${key}`} data-rel-key={key} data-rel-state={relState}>
+                        <polyline points={pts} fill="none" stroke={color} strokeWidth={isFocused ? 2.2 : 1.2}
+                          opacity={isDimmed ? 0.12 : isFocused ? 1 : 0.6} />
+                        <polygon points={ah} fill={color} opacity={isDimmed ? 0.15 : isFocused ? 1 : 0.6} />
+                        <text x={elbowX + 2} y={(predY + succY) / 2 + 3} fill={color} fontSize="7"
+                          opacity={isDimmed ? 0.15 : isFocused ? 1 : 0.65} fontFamily="sans-serif">{type}</text>
                       </g>
                     );
                   });

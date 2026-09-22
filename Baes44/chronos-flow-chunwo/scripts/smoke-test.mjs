@@ -2359,6 +2359,48 @@ try {
   results.push(["ImageImportDialog page range + render size (batch 7 guard)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
 }
 
+// ── Batch 47 regression guard ────────────────────────────────────────────────
+// Clicking an activity row must emphasise the relationship lines that touch it
+// and fade the unrelated ones. The effect is temporary: it is derived purely
+// from selectedIds, so clearing the selection restores the normal drawing.
+try {
+  const { default: UnifiedGanttLayout } = await server.ssrLoadModule("/src/components/gantt/UnifiedGanttLayout.jsx");
+  const linkTasks = [
+    { id: "t1", activityId: "A1010", activity: "Excavation", start: "2025-01-06", end: "2025-01-20", link: "t2", linkType: "FS" },
+    { id: "t2", activityId: "A1020", activity: "Piling", start: "2025-01-21", end: "2025-02-10", link: "t3", linkType: "SS" },
+    { id: "t3", activityId: "A1030", activity: "Pile cap", start: "2025-02-11", end: "2025-03-10", link: "t4", linkType: "FF" },
+    { id: "t4", activityId: "A1040", activity: "Pile test", start: "2025-03-11", end: "2025-03-25" },
+  ];
+  const secTasks = [{ id: "s1", isSection: true, activity: "Piling Works", sectionType: "blue" }, ...linkTasks];
+  const render = (selected) => renderToString(React.createElement(UnifiedGanttLayout, {
+    ...baseProps, tasks: secTasks, computedTasks: secTasks,
+    selectedIds: new Set(selected), displaySettings: null,
+  })).replace(/<!--[^>]*-->/g, "");
+  const countOf = (html, value) => (html.match(new RegExp(`data-rel-state="${value}"`, "g")) || []).length;
+  const lines = (html) => (html.match(/data-rel-key="/g) || []).length;
+
+  const none = render([]);
+  const secOnly = render(["s1"]);
+  const focusMid = render(["t2"]);
+  const focusLast = render(["t3"]);
+  const focusMulti = render(["t2", "t4"]);
+  const ok = lines(none) === 3                                          // the three links are drawn
+    && countOf(none, "focus") === 0 && countOf(none, "dim") === 0       // no selection → drawing unchanged
+    && countOf(secOnly, "focus") === 0 && countOf(secOnly, "dim") === 0 // a section click must not fade anything
+    && lines(focusMid) === 3 && countOf(focusMid, "focus") === 2 && countOf(focusMid, "dim") === 1
+    && countOf(focusLast, "focus") === 2 && countOf(focusLast, "dim") === 1
+    && countOf(focusMulti, "focus") === 3 && countOf(focusMulti, "dim") === 0;
+  results.push([
+    "Gantt relationship-line focus (batch 47)",
+    ok
+      ? "OK (3 links; clicking an activity focuses the lines that touch it and dims the rest; sections / no selection leave it unchanged)"
+      : `FAILED (lines=${lines(none)}, none f${countOf(none, "focus")}/d${countOf(none, "dim")}, section f${countOf(secOnly, "focus")}/d${countOf(secOnly, "dim")}, t2 f${countOf(focusMid, "focus")}/d${countOf(focusMid, "dim")}, t3 f${countOf(focusLast, "focus")}/d${countOf(focusLast, "dim")}, t2+t4 f${countOf(focusMulti, "focus")}/d${countOf(focusMulti, "dim")})`,
+  ]);
+} catch (e) {
+  results.push(["Gantt relationship-line focus (batch 47)", `FAILED: ${e.constructor.name}: ${String(e.message).split("\n")[0]}`]);
+}
+
+
 console.log("SMOKE TEST RESULTS");
 for (const [l, r] of results) console.log(`  ${l}: ${r}`);
 await server.close();

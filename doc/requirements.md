@@ -4371,3 +4371,50 @@ scripts\status.bat      → port 15156 / 25156 正確讀取；OCR helper RUNNING
 | NFR-4604 | start-all idempotent（重跑不重啟已在跑的服務） | start-all | Operator wants safe re-runs | Verified |
 | AC-4601 | 實測 stop→start：15156/25156 皆起來、8199/7861/11434 保持、exit 0 | 手測 2026-09-21 | Operator wants everything started | Verified |
 
+---
+
+## 📦 Batch 47 — 點選活動即高亮其 Relationship Lines（臨時顯示效果）
+
+### 使用者需求（2026-09-22）
+> 「Relationship Lines 在點選後，如果點擊某一活動項，該活動項所關聯的 Relationship Lines 應該特別高亮起來，淡化其他無關活動項的 Relationship Lines，該設定為臨時顯示效果。」
+
+### User Story
+As a **planner**, I want **clicking an activity to emphasise only the relationship lines that touch it**, so that **I can trace one activity's logic at a glance instead of untangling every link on the chart**.
+
+### Requirements
+- **Functional**
+  - FR-4701：點選活動列後，**與該活動相關**（作為 predecessor 或 successor）的關係線（FS/SS/FF/SF）全不透明繪製並加粗（線寬 1.2 → 2.2），箭頭與類型標籤同時提亮。
+  - FR-4702：同時**其他無關**關係線淡化（線 12%／箭頭 15%／標籤 15% 不透明度）。
+  - FR-4703：Ctrl／Cmd 多選採**聯集**——任一被選活動涉及的線皆高亮，其餘淡化。
+  - FR-4704：**未選取**任何活動，或只選到 WBS 分段列時，維持原繪製（線／箭頭 60%、標籤 65%），不淡化任何線。
+  - FR-4705：**臨時效果**——完全由 `selectedIds` 推導，清除選取即恢復（Other ▸ Clear selection）；不寫入 `displaySettings`／localStorage，也不影響列印／PDF 輸出。
+- **Non-Functional**
+  - NFR-4701：顏色沿用既有 `REL_COLORS`（`#005a53` FS／`#003531` SS／`#733208` FF／`#e88219` SF），僅調整不透明度與線寬 → 符合 Common Look and Feel（light-only）。
+  - NFR-4702：不改變關係線的**幾何路徑**（折線轉角、箭頭位置）與資料來源（`task.links` / `task.link`）。
+- **Constraints**：只改 `UnifiedGanttLayout.jsx` 的關係線繪製區塊；不新增 React 狀態、不新增設定項、不動 print/PDF。
+
+### 實作
+| 檔案 | 變更 |
+|---|---|
+| `src/components/gantt/UnifiedGanttLayout.jsx` | 關係線區塊新增 `focusIds`（選取 ∩ 有 bar 的活動，自動排除分段列）與 `relState`（`focus`／`dim`／`normal`）；`<g>` 加上 `data-rel-key` 與 `data-rel-state`（供回歸測試與除錯）；線／箭頭／標籤依狀態採 1（focus）、0.12–0.15（dim）、0.6–0.65（normal）不透明度 |
+| `scripts/smoke-test.mjs` | 新增批次 47 回歸測試（4 個活動 + 3 條 FS/SS/FF 連結 + 1 個 WBS 分段） |
+
+### 驗證（TDD：先 RED 再 GREEN）
+1. **RED**：先加測試 → `Gantt relationship-line focus (batch 47): FAILED (lines=0, none f0/d0, section f0/d0, t2 f0/d0, t3 f0/d0, t2+t4 f0/d0)` ✓（功能未實作）
+2. **GREEN**：實作後 → `OK (3 links; clicking an activity focuses the lines that touch it and dims the rest; sections / no selection leave it unchanged)`；整體 **90 OK / 0 FAIL**（89 + 新增 1）、`eslint` exit 0
+3. 建置：`node node_modules/vite/bin/vite.js build` exit 0；dev server `/src/components/gantt/UnifiedGanttLayout.jsx`、`/src/pages/GanttPage.jsx`、`/` 皆 HTTP 200
+4. 測試涵蓋：未選取不變、只選分段列不淡化、選中間活動（2 亮 1 暗）、選另一活動（2 亮 1 暗）、多選聯集（3 亮 0 暗）
+
+**RTM（批次 47）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-4701 | 點選活動 → 相關關係線全亮並加粗（含箭頭與標籤） | UnifiedGanttLayout 關係線區塊 | Planner wants to trace one activity's logic | Verified |
+| FR-4702 | 無關關係線淡化（12%／15%／15%） | UnifiedGanttLayout 關係線區塊 | Planner wants the rest to recede | Verified |
+| FR-4703 | 多選時採聯集高亮 | UnifiedGanttLayout（`focusIds`） | Planner wants several activities at once | Verified |
+| FR-4704 | 未選取／只選分段列 → 完全不變（60%／65%） | UnifiedGanttLayout（`relState="normal"`） | Planner wants no surprise dimming | Verified |
+| FR-4705 | 臨時效果：由 selectedIds 推導、清除即恢復、不持久化、不影響列印 | UnifiedGanttLayout（無新 state） | Planner wants a temporary aid | Verified |
+| NFR-4701 | 顏色沿用 REL_COLORS，僅改不透明度／線寬（light-only 合規） | UnifiedGanttLayout | Common Look and Feel | Verified |
+| NFR-4702 | 幾何路徑與資料來源不變 | UnifiedGanttLayout | No regression risk | Verified |
+| AC-4701 | smoke test 90 OK / 0 FAIL、eslint 0、vite build 0、模組 200 | 量測（2026-09-22） | Planner wants a safe change | Verified |
+
