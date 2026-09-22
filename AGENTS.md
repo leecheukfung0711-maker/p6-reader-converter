@@ -55,6 +55,13 @@ The system runs with **SQLite** (zero-config) and **frontend/backend locally on 
 >   2. Then restart with `scripts/start-all.sh` (or `scripts\start-all.bat`).
 > - Do **not** pass a different port via CLI flags, environment overrides, `--port`, `--strictPort`, or any other mechanism that bypasses `.env`.
 > - The only permitted reason to change `.env` ports is during the very first machine setup when the defaults permanently clash with other installed software — and only the **user** should make that edit, not the agent.
+>
+> **Local OCR plugin ports (NOT in `.env`):** the OCR stack is a separate, user-installed tool rather
+> than a workspace service. PP-OCR helper `http://127.0.0.1:8199` (it also doubles as the engine
+> launcher), PST-OCR `:7861`, Ollama `:11434`. `scripts/start-all` starts the helper (and asks it to
+> start the engines) by default; `scripts/status` reports them; `scripts/stop-all` leaves them alone
+> unless `STOP_OCR=1`. These are optional for the app — do not "free" them while another tool uses them.
+
 
 ### Services
 

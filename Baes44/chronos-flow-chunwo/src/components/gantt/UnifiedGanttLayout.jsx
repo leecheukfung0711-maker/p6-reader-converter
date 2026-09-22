@@ -21,8 +21,10 @@ import BulkEditBar from "./BulkEditBar";
 import BarColorPicker from "./BarColorPicker";
 import SectionColorPicker from "./SectionColorPicker";
 import { buildPLF, parsePLF } from "@/lib/parsePLF";
-import { cssGridBorder, formatDisplayDate, mergeDisplaySettings, resolveWbsRowStyle } from "@/lib/displaySettings";
+import { cssGridBorder, formatDisplayDate, mergeDisplaySettings, resolveWbsRowStyle, buildBarTextParts, normalizeBarTextPosition, barTextFontFamilyCss, measureTextWidth, fitFontSizeToWidth } from "@/lib/displaySettings";
+import { clampWbsLevel, wbsIndentPx } from "@/lib/wbsLevel";
 import { buildRelationshipMap } from "@/lib/buildRelationshipMap";
+import { normalizeRecalcDate } from "@/lib/quickFilters";
 
 const ROW_H = 27;
 const COL_WIDTH_DEFAULT = { year: 160, month: 60, week: 40, day: 24, weekDay: 32 };
@@ -155,6 +157,9 @@ export default function UnifiedGanttLayout({
   selectedIds, setSelectedIds, onPaste,
   durMode, setDurMode,
   viewMode, showToday,
+  // Batch 44 — holiday markers are their own switch (default OFF) instead of riding on the
+  // Today line: the two are separate options in the Print Preview too.
+  showHolidays = false,
   labelOffsets, setLabelOffsets,
   tableWidth, startResize,
   saveToHistory,
@@ -165,6 +170,12 @@ export default function UnifiedGanttLayout({
   onDropImport,
   showStaircase = true,
   showRelationshipLines = true,
+  // Batch 27 — Last Recalc Date (the programme's data date): the line on the
+  // chart, and the editor behind the row right-click menu.
+  showRecalcLine = true,
+  recalcDate = "",
+  fileRecalcDate = "",
+  onRecalcDateChange,
   staircaseFilter = null,
   onStaircaseFilterChange,
   onFiltersLoaded,
@@ -188,8 +199,8 @@ export default function UnifiedGanttLayout({
   const BD_ROW   = cssGridBorder(grid.rowVisible,   grid.rowWeight,   grid.rowStyle,   grid.rowColor);
   const BD_COL   = cssGridBorder(grid.colVisible,   grid.colWeight,   grid.colStyle,   grid.colColor);
   const BD_GROUP = cssGridBorder(grid.groupVisible, grid.groupWeight, grid.groupStyle, grid.groupColor);
-  // Holiday markers are shown together with Today line
-  const showHolidays = showToday;
+  // Batch 44 — holiday markers have their own switch (`showHolidays`, default OFF). They
+  // used to be tied to the Today line, so "Holiday Markers: off" also removed the today line.
   // Local state for columnVisibility and cw if not provided by parent
   const [localColumnVisibility, setLocalColumnVisibility] = useState(INIT_VISIBILITY);
   const [localCw, setLocalCw] = useState(INIT_W);
@@ -784,6 +795,17 @@ Return an array of internal keys (right side of →) in LEFT-TO-RIGHT order.`,
 
   const todayLeft = useMemo(() => differenceInDays(new Date(), tlStart) * ppd, [tlStart, ppd]);
 
+  // Last Recalc Date (batch 27) — the date the programme is *at*. Drawn as a
+  // dashed orange line so it can never be confused with the solid red today line.
+  const recalcIso = useMemo(() => normalizeRecalcDate(recalcDate), [recalcDate]);
+  const recalcLeft = useMemo(() => {
+    if (!recalcIso) return null;
+    const parsed = parseISO(recalcIso);
+    if (!isValid(parsed)) return null;
+    const x = differenceInDays(parsed, tlStart) * ppd;
+    return Number.isFinite(x) ? x : null;
+  }, [recalcIso, tlStart, ppd]);
+
   // First header row: group the columns by the scale's top granularity
   const topRow = useMemo(() => {
     const labelOf = (d) =>
@@ -881,8 +903,16 @@ Return an array of internal keys (right side of →) in LEFT-TO-RIGHT order.`,
   const add = ()=>{ saveToHistory && saveToHistory(tasks); setTasks(p=>[...p,{id:nextId.current++,activity:"",start:"",end:"",barType:"baseline"}]); };
   const addSec = type=>{ saveToHistory && saveToHistory(tasks); setTasks(p=>[...p,{id:nextId.current++,isSection:true,sectionType:type,activity:"New Programme"}]); };
 
+  // Batch 27 — right-clicking a *date cell* opens the same row menu, plus a
+  // "use this cell" shortcut so the programme's Last Recalc Date can be set
+  // straight from the date column.
+  const openCellMenu = useCallback((e, idx, colKey) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setContextMenu({ x: e.clientX, y: e.clientY, taskIdx: idx, dateCell: colKey });
+  }, []);
 
-  const handleContextAction = useCallback((action) => {
+  const handleContextAction = useCallback((action, payload) => {
     if (!contextMenu) return;
     const { taskIdx } = contextMenu;
     const task = tasks[taskIdx];
@@ -894,6 +924,10 @@ Return an array of internal keys (right side of →) in LEFT-TO-RIGHT order.`,
     else if (action === "toggleEndActual") upd(task.id, "endActual", !task.endActual);
     else if (action === "toggleSectionType") upd(task.id, "sectionType", (task.sectionType||"blue")==="blue"?"pink":"blue");
     else if (action === "toggleComparison") upd(task.id, "showComparison", task.showComparison===false);
+    // ── Batch 23A: manual WBS level control (clamped to the 7 colour steps) ──
+    else if (action === "setSectionLevel") upd(task.id, "sectionLevel", clampWbsLevel(payload));
+    else if (action === "indentSection") upd(task.id, "sectionLevel", clampWbsLevel((Number(task.sectionLevel) || 1) + 1));
+    else if (action === "outdentSection") upd(task.id, "sectionLevel", clampWbsLevel((Number(task.sectionLevel) || 1) - 1));
     else if (action === "delete") del(task.id);
    
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1199,6 +1233,10 @@ Return an array of internal keys (right side of →) in LEFT-TO-RIGHT order.`,
           x={contextMenu.x} y={contextMenu.y}
           task={tasks[contextMenu.taskIdx]}
           taskIdx={contextMenu.taskIdx}
+          dateCell={contextMenu.dateCell || null}
+          recalcDate={recalcDate}
+          fileRecalcDate={fileRecalcDate}
+          onRecalcDateChange={onRecalcDateChange}
           onClose={() => setContextMenu(null)}
           onAction={handleContextAction}
           onColorChange={(task, menuX, menuY) => {
@@ -1483,7 +1521,20 @@ Return an array of internal keys (right side of →) in LEFT-TO-RIGHT order.`,
                     </button>
                     <input type="text" value={task.activity} onChange={e=>upd(task.id,"activity",e.target.value)}
                       className="w-full font-bold outline-none bg-transparent px-2"
-                      style={{ height:ROW_H, border:"none", color:secStyle.text, fontSize: Math.round((secStyle.fontSize || grp.fontSize)*tableFontScale), fontWeight: secStyle.fontWeight, fontStyle: secStyle.fontStyle, fontFamily: secStyle.fontFamily || undefined, paddingLeft: 4 + (grp.indent||0) }}/>
+                      style={{ height:ROW_H, border:"none", color:secStyle.text, fontSize: Math.round((secStyle.fontSize || grp.fontSize)*tableFontScale), fontWeight: secStyle.fontWeight, fontStyle: secStyle.fontStyle, fontFamily: secStyle.fontFamily || undefined, paddingLeft: 4 + wbsIndentPx(task.sectionLevel, grp.indent, dsp.wbs.indentByLevel !== false) }}/>
+                    {/* Batch 40 — the same delete button the activity rows carry, at the right
+                        edge of the row, so a programme (e.g. a leftover "New Programme") can be
+                        removed without going through the right-click menu. */}
+                    <button
+                      type="button"
+                      onClick={(e) => { e.stopPropagation(); del(task.id); }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      title="Delete row (Ctrl+Z to undo)"
+                      className="opacity-0 group-hover:opacity-100 text-danger hover:text-danger flex-shrink-0"
+                      tabIndex={-1}
+                    >
+                      <Trash2 size={10} />
+                    </button>
                   </div>
                 ) : (
                   <>
@@ -1512,7 +1563,7 @@ Return an array of internal keys (right side of →) in LEFT-TO-RIGHT order.`,
                            const _compStartS = _useLateCompS ? (task.lateStart || task.start) : _useEarlyCompS ? (task.earlyStart || task.start) : task.baselineStart;
                            const _diffStartS = _compStartS && _compStartS !== task.start;
                            const _compLabelS = _useLateCompS ? `Late: ${_compStartS}` : _useEarlyCompS ? `Early: ${_compStartS}` : `BL: ${_compStartS}`;
-                           return <C key={colKey} w={cellW} style={{ overflow: "hidden", maxWidth: cellW, background: _diffStartS ? "#fff2ea" : undefined }}>
+                           return <C key={colKey} w={cellW} onContextMenu={(e) => openCellMenu(e, idx, colKey)} style={{ overflow: "hidden", maxWidth: cellW, background: _diffStartS ? "#fff2ea" : undefined }}>
                              <div style={{ display: "flex", alignItems: "center", height: ROW_H, overflow: "hidden", width: "100%" }} title={_diffStartS ? _compLabelS : undefined}>
                               <input type="date" value={task.start} onChange={e => { if (task.startActual) return; const newStart = e.target.value; if (durLocked && task.start && task.end && newStart && isValid(parseISO(newStart))) { const diff = differenceInDays(parseISO(task.end), parseISO(task.start)); updFields(task.id, { start: newStart, end: format(addDays(parseISO(newStart), diff), "yyyy-MM-dd") }); } else { upd(task.id, "start", newStart); } }} onKeyDown={e => { if (!task.startActual && (e.key === "=" || e.key === "`")) { e.preventDefault(); fillPrev(task.id); } }} readOnly={task.startActual} title={!task.start && task.end ? "No Start → Finish Milestone (TT_FinMile) in P6" : undefined} className="outline-none bg-transparent px-1 focus:bg-surface-subtle" style={{ height: ROW_H, border: "none", width: 0, flex: "1 1 0", minWidth: 0, maxWidth: "100%", color: task.startActual ? "#dc3545" : (!task.start && task.end ? "#733208" : undefined), fontWeight: task.startActual ? 700 : (!task.start && task.end ? 600 : undefined), cursor: task.startActual ? "not-allowed" : undefined, fontSize: fs }} />
                               <button onClick={() => upd(task.id, "startActual", !task.startActual)} tabIndex={-1} className="flex-shrink-0 px-0.5" style={{ color: task.startActual ? "#dc3545" : "#cecece", fontSize: 9, fontWeight: 900, lineHeight: 1 }}>A</button>
@@ -1528,7 +1579,7 @@ Return an array of internal keys (right side of →) in LEFT-TO-RIGHT order.`,
                            const _compEndE = _useLateCompE ? (task.lateEnd || task.end) : _useEarlyCompE ? (task.earlyEnd || task.end) : task.baselineFinish;
                            const _diffEndE = _compEndE && _compEndE !== task.end;
                            const _compLabelE = _useLateCompE ? `Late: ${_compEndE}` : _useEarlyCompE ? `Early: ${_compEndE}` : `BL: ${_compEndE}`;
-                           return <C key={colKey} w={cellW} style={{ overflow: "hidden", maxWidth: cellW, background: _diffEndE ? "#fff2ea" : undefined }}>
+                           return <C key={colKey} w={cellW} onContextMenu={(e) => openCellMenu(e, idx, colKey)} style={{ overflow: "hidden", maxWidth: cellW, background: _diffEndE ? "#fff2ea" : undefined }}>
                              <div style={{ display: "flex", alignItems: "center", height: ROW_H, overflow: "hidden", width: "100%" }} title={_diffEndE ? _compLabelE : undefined}>
                               <input type="date" value={task.end} onChange={e => { if (task.endActual) return; const newEnd = e.target.value; if (durLocked && task.start && task.end && newEnd && isValid(parseISO(newEnd))) { const diff = differenceInDays(parseISO(task.end), parseISO(task.start)); updFields(task.id, { start: format(addDays(parseISO(newEnd), -diff), "yyyy-MM-dd"), end: newEnd }); } else { upd(task.id, "end", newEnd); } }} readOnly={task.endActual} title={task.start && !task.end ? "No End → Start Milestone (TT_Mile) in P6" : undefined} className="outline-none bg-transparent px-1 focus:bg-surface-subtle" style={{ height: ROW_H, border: "none", width: 0, flex: "1 1 0", minWidth: 0, maxWidth: "100%", color: task.endActual ? "#dc3545" : (task.start && !task.end ? "#733208" : undefined), fontWeight: task.endActual ? 700 : (task.start && !task.end ? 600 : undefined), cursor: task.endActual ? "not-allowed" : undefined, fontSize: fs }} />
                               <button onClick={() => upd(task.id, "endActual", !task.endActual)} tabIndex={-1} className="flex-shrink-0 px-0.5" style={{ color: task.endActual ? "#dc3545" : "#cecece", fontSize: 9, fontWeight: 900, lineHeight: 1 }}>A</button>
@@ -1543,24 +1594,31 @@ Return an array of internal keys (right side of →) in LEFT-TO-RIGHT order.`,
                         case "pct":
                           return <C key={colKey} w={cellW}><span className="w-full text-center font-mono" style={{ fontSize: fsSmall, color: "#003531" }}>{task.pct != null ? `${task.pct}%` : "–"}</span></C>;
                         case "blStart":
-                          return <C key={colKey} w={cellW}><span className="w-full text-center font-mono" style={{ fontSize: fsSmall, color: "#733208" }}>{formatDisplayDate(task.baselineStart, dateFormat) || "–"}</span></C>;
+                          return <C key={colKey} w={cellW} onContextMenu={(e) => openCellMenu(e, idx, colKey)}><span className="w-full text-center font-mono" style={{ fontSize: fsSmall, color: "#733208" }}>{formatDisplayDate(task.baselineStart, dateFormat) || "–"}</span></C>;
                         case "blEnd":
-                          return <C key={colKey} w={cellW}><span className="w-full text-center font-mono" style={{ fontSize: fsSmall, color: "#733208" }}>{formatDisplayDate(task.baselineFinish, dateFormat) || "–"}</span></C>;
+                          return <C key={colKey} w={cellW} onContextMenu={(e) => openCellMenu(e, idx, "blEnd")}><span className="w-full text-center font-mono" style={{ fontSize: fsSmall, color: "#733208" }}>{formatDisplayDate(task.baselineFinish, dateFormat) || "–"}</span></C>;
                         case "duration":
-                          return <C key={colKey} w={cellW}><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: ROW_H, overflow: "hidden", paddingLeft: 4, paddingRight: 2 }}><div style={{ display: "flex", alignItems: "center", gap: 2, flex: 1, justifyContent: "center" }}>{durMode === "wd" ? (<><input type="number" min="0" value={(!task.start || !task.end) ? "0" : calcWD(task.start, task.end) || ""} onChange={e => { const wd = parseInt(e.target.value, 10); if (wd > 0 && task.start && task.end && !task.endActual) { upd(task.id, "end", addWorkingDays(task.start, wd)); } }} disabled={!task.start && !task.end} className="font-bold font-mono text-center outline-none bg-transparent focus:bg-surface-subtle rounded" style={{ fontSize: 9, color: bt === "delay" ? "#005a53" : "#005a53", width: 28, height: 14, border: "none", padding: 0 }} /><span className="font-bold font-mono" style={{ fontSize: 9, color: bt === "delay" ? "#005a53" : "#005a53" }}>WD</span></>) : (<><input type="number" min="0" value={(!task.start || !task.end) ? "0" : calcCal(task.start, task.end) || ""} onChange={e => { const c = parseInt(e.target.value, 10); if (c > 0 && task.start && task.end && !task.endActual) { upd(task.id, "end", format(addDays(parseISO(task.start), c - 1), "yyyy-MM-dd")); } }} disabled={!task.start && !task.end} className="font-bold font-mono text-center outline-none bg-transparent focus:bg-surface-subtle rounded" style={{ fontSize: 9, color: bt === "delay" ? "#005a53" : "#005a53", width: 28, height: 14, border: "none", padding: 0 }} /><span className="font-bold font-mono" style={{ fontSize: 9, color: bt === "delay" ? "#005a53" : "#005a53" }}>Cal</span></>)}</div><button onClick={() => del(task.id)} className="opacity-0 group-hover:opacity-100 text-danger hover:text-danger flex-shrink-0" tabIndex={-1}><Trash2 size={10} /></button></div></C>;
+                          return <C key={colKey} w={cellW}><div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", height: ROW_H, overflow: "hidden", paddingLeft: 4, paddingRight: 2 }}><div style={{ display: "flex", alignItems: "center", gap: 2, flex: 1, justifyContent: "center" }}>{durMode === "wd" ? (<><input type="number" min="0" value={(!task.start || !task.end) ? "0" : calcWD(task.start, task.end) || ""} onChange={e => { const wd = parseInt(e.target.value, 10); if (wd > 0 && task.start && task.end && !task.endActual) { upd(task.id, "end", addWorkingDays(task.start, wd)); } }} disabled={!task.start && !task.end} className="font-bold font-mono text-center outline-none bg-transparent focus:bg-surface-subtle rounded" style={{ fontSize: 9, color: bt === "delay" ? "#005a53" : "#005a53", width: 28, height: 14, border: "none", padding: 0 }} /><span className="font-bold font-mono" style={{ fontSize: 9, color: bt === "delay" ? "#005a53" : "#005a53" }}>WD</span></>) : (<><input type="number" min="0" value={(!task.start || !task.end) ? "0" : calcCal(task.start, task.end) || ""} onChange={e => { const c = parseInt(e.target.value, 10); if (c > 0 && task.start && task.end && !task.endActual) { upd(task.id, "end", format(addDays(parseISO(task.start), c - 1), "yyyy-MM-dd")); } }} disabled={!task.start && !task.end} className="font-bold font-mono text-center outline-none bg-transparent focus:bg-surface-subtle rounded" style={{ fontSize: 9, color: bt === "delay" ? "#005a53" : "#005a53", width: 28, height: 14, border: "none", padding: 0 }} /><span className="font-bold font-mono" style={{ fontSize: 9, color: bt === "delay" ? "#005a53" : "#005a53" }}>Cal</span></>)}</div><button type="button" onClick={() => del(task.id)} title="Delete row (Ctrl+Z to undo)" className="opacity-0 group-hover:opacity-100 text-danger hover:text-danger flex-shrink-0" tabIndex={-1}><Trash2 size={10} /></button></div></C>;
                         // ── Additional P6 fields (readonly display) ────────────────────
                         case "earlyStart": case "earlyEnd": case "lateStart": case "lateEnd":
                         case "expectedFinish": case "constraintDate": case "constraintDate2":
                         case "suspendDate": case "resumeDate": case "reviewFinish":
                         case "externalEarlyStart": case "externalLateFinish":
                         case "remEarlyStart": case "remEarlyFinish": case "remLateStart": case "remLateFinish":
-                          return <C key={colKey} w={cellW}><span className="w-full text-center font-mono" style={{ fontSize: fsSmall, color: "#003531" }}>{formatDisplayDate(task[colKey], dateFormat) || "–"}</span></C>;
+                          return <C key={colKey} w={cellW} onContextMenu={(e) => openCellMenu(e, idx, colKey)}><span className="w-full text-center font-mono" style={{ fontSize: fsSmall, color: "#003531" }}>{formatDisplayDate(task[colKey], dateFormat) || "–"}</span></C>;
                         case "freeFloat": case "targetDuration":
                           return <C key={colKey} w={cellW}><span className="w-full text-center font-mono" style={{ fontSize: fsSmall, color: task[colKey] != null && Number(task[colKey]) < 0 ? "#dc3545" : "#003531" }}>{task[colKey] != null ? task[colKey] : "–"}</span></C>;
                         case "primaryResource": case "durationType": case "completePctType":
                         case "statusCode": case "constraintType": case "constraintType2":
                         case "priorityType": case "locationId": case "reviewStatus": case "p6Guid": case "p6TaskId": case "calendar":
-                          return <C key={colKey} w={cellW} style={{ overflow: "hidden" }}><span className="w-full text-center truncate px-1" style={{ fontSize: fsSmall, color: "#003531" }} title={task[colKey]}>{task[colKey] || "–"}</span></C>;
+                          return (
+                            <C key={colKey} w={cellW} style={{ overflow: "hidden" }}>
+                              <span className="w-full text-center px-1" title={task[colKey]}
+                                style={{ fontSize: fitFontSizeToWidth(task[colKey] || "", cellW - 8, fsSmall, "", 6.5), color: "#003531" }}>
+                                {task[colKey] || "–"}
+                              </span>
+                            </C>
+                          );
                         case "drivingPathFlag": case "lockPlanFlag": case "autoComputeActFlag":
                           return <C key={colKey} w={cellW}><span className="w-full text-center font-mono" style={{ fontSize: fsSmall, color: task[colKey] === "Y" ? "#005a53" : "#6c757d" }}>{task[colKey] || "–"}</span></C>;
                         case "estWt": case "floatPath": case "floatPathOrder":
@@ -1661,7 +1719,7 @@ Return an array of internal keys (right side of →) in LEFT-TO-RIGHT order.`,
                   onContextMenu={e=>{ e.preventDefault(); setContextMenu({ x:e.clientX, y:e.clientY, taskIdx:idx }); }}
                   style={{ height:ROW_H, minHeight:ROW_H, maxHeight:ROW_H, background:rowBg, position:"relative", opacity: rowOpacity(task), borderBottom: isSec ? BD_GROUP : BD_ROW, overflow:"visible", flexShrink:0, display:"flex", alignItems:"center" }}>
                   {isSec && dsp.wbs.groupHeadersOnGantt !== false && (
-                    <span style={{ fontSize: Math.max(9, (secStyle.fontSize || grp.fontSize) - 1), fontWeight: secStyle.fontWeight, fontStyle: secStyle.fontStyle, fontFamily: secStyle.fontFamily || undefined, color: secStyle.text, padding:"0 8px", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis", pointerEvents:"none" }}>
+                    <span style={{ fontSize: Math.max(9, (secStyle.fontSize || grp.fontSize) - 1), fontWeight: secStyle.fontWeight, fontStyle: secStyle.fontStyle, fontFamily: secStyle.fontFamily || undefined, color: secStyle.text, whiteSpace:"nowrap", paddingTop:0, paddingBottom:0, paddingRight:8, paddingLeft: 8 + wbsIndentPx(task.sectionLevel, 0, dsp.wbs.indentByLevel !== false), pointerEvents:"none" }}>
                       {collapsedIds.has(task.id) ? "▸ " : ""}{task.activity}
                     </span>
                   )}
@@ -1772,16 +1830,42 @@ Return an array of internal keys (right side of →) in LEFT-TO-RIGHT order.`,
                     const barShadow = bar.shadow ? `0 ${bar.shadowOffsetY}px ${bar.shadowBlur}px ${bar.shadowColor}` : "none";
                     const barRadius = hasComp ? `0 0 ${bar.cornerRadius}px ${bar.cornerRadius}px` : `${bar.cornerRadius}px`;
                     const cmpRadius = `${bar.cornerRadius}px ${bar.cornerRadius}px 0 0`;
-                    const labelText = (() => {
-                      const f = bar.label.field;
-                      if (f === "item") return task._resolvedItem || task.item || task.customItem || "";
-                      if (f === "activityId") return task.activityId || "";
-                      if (f === "activity") return task.activity || "";
-                      if (f === "start") return formatDisplayDate(task.start, dateFormat);
-                      if (f === "finish") return formatDisplayDate(task.end, dateFormat);
-                      if (f === "duration") return (task.start && task.end) ? `${differenceInDays(parseISO(task.end), parseISO(task.start)) + 1}d` : "";
-                      return "";
-                    })();
+                    // Batch 28: text = Labels-tab field + every enabled Bar Info
+                    // part (name / start / finish), de-duplicated — one helper,
+                    // shared with the PDF so both show the same thing.
+                    // Batch 32: with BOTH date switches on, the two dates are split
+                    // apart — start date in front of the bar, finish date behind it.
+                    const parts = buildBarTextParts(task, bar, dateFormat);
+                    const labelText = parts.main;
+                    // Batch 29: where it sits and how it looks.
+                    // Batch 30: "fit" is *measured* (not the fixed minimum width),
+                    // so a caption is never rendered as "A1 · Excava…" — if the whole
+                    // text does not fit inside the bar it is drawn outside instead.
+                    const labelPos = normalizeBarTextPosition(bar.label.position);
+                    const labelFontFamily = barTextFontFamilyCss(bar.label.fontFamily);
+                    const minLabelW = bar.label.minWidth ?? 50;
+                    const labelWidth = measureTextWidth(labelText, bar.label.fontSize, labelFontFamily || "");
+                    const insideRoom = pos.width - 6;
+                    const showInsideLabel = labelPos === "inside" && !hasComp
+                      && insideRoom >= Math.max(minLabelW, labelWidth);
+                    // front | inside | back for the main caption (the dates keep their
+                    // own slots in split mode)
+                    const mainSide = !labelText ? null
+                      : showInsideLabel ? "inside"
+                      : labelPos === "before" ? "front" : "back";
+                    const frontText = [mainSide === "front" ? labelText : "", parts.front].filter(Boolean);
+                    const backText = [parts.back, mainSide === "back" ? labelText : ""].filter(Boolean);
+                    // One flex row per side, flush against the bar edge, so nothing
+                    // can overlap however long the pieces are.
+                    const captionBox = (side) => ({
+                      position: "absolute", top: "50%", zIndex: 5, pointerEvents: "none",
+                      display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap",
+                      fontSize: bar.label.fontSize, fontFamily: labelFontFamily,
+                      color: bar.label.colorOutside,
+                      ...(side === "front"
+                        ? { left: pos.left - 4, transform: "translate(-100%, -50%)" }
+                        : { left: pos.left + pos.width + 4, transform: "translateY(-50%)" }),
+                    });
 
                     return (
                     <>
@@ -1808,13 +1892,23 @@ Return an array of internal keys (right side of →) in LEFT-TO-RIGHT order.`,
                       <div style={{ position:"absolute", left:pos.left, width:pos.width, height:hasComp?HALF:barH, top:hasComp ? Math.floor((ROW_H - HALF*2)/2)+HALF : "50%", transform:hasComp?"none":"translateY(-50%)", background:barColor, cursor:fl?"not-allowed":"move", opacity:draggingBar?.taskId===task.id?0.7:1, borderRadius:barRadius, border:barBorder, boxShadow:barShadow, boxSizing:"border-box", display:"flex", alignItems:"center", paddingLeft:4, overflow:"hidden", zIndex:4 }}
                         title={isDeleted ? "Deleted — this activity does not exist in the comparison programme" : (isCriticalBar ? "Critical (Total Float <= 0)" : compTooltip)}
                         onMouseDown={e=>!fl&&barDown(e,task,"move")}>
-                        {bar.label.show && bar.label.position === "inside" && !hasComp && pos.width > (bar.label.minWidth ?? 50) && labelText && (
-                          <span style={{ color:bar.label.color, fontSize:bar.label.fontSize, fontWeight:500, whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{labelText}</span>
+                        {showInsideLabel && labelText && (
+                          <span style={{ color:bar.label.color, fontSize:bar.label.fontSize, fontFamily:labelFontFamily, fontWeight:500, whiteSpace:"nowrap" }}>{labelText}</span>
                         )}
                       </div>
-                      {/* Optional label outside (right of) the bar */}
-                      {bar.label.show && bar.label.position === "right" && labelText && (
-                        <span style={{ position:"absolute", left:pos.left+pos.width+4, top:"50%", transform:"translateY(-50%)", fontSize:bar.label.fontSize, color:bar.label.color, whiteSpace:"nowrap", pointerEvents:"none", zIndex:5 }}>{labelText}</span>
+                      {/* In front of the bar: the main caption (when its Position is
+                          "before") followed by the start date in split mode. */}
+                      {frontText.length > 0 && (
+                        <div style={captionBox("front")}>
+                          {frontText.map((t, i) => <span key={i}>{t}</span>)}
+                        </div>
+                      )}
+                      {/* Behind the bar: the finish date in split mode, then the main
+                          caption (its Position is "after", or inside did not fit). */}
+                      {backText.length > 0 && (
+                        <div style={captionBox("back")}>
+                          {backText.map((t, i) => <span key={i}>{t}</span>)}
+                        </div>
                       )}
                       {!el&&<div style={{ position:"absolute", left:pos.left+pos.width-6, width:6, height:hasComp?HALF:barH, top:hasComp ? Math.floor((ROW_H - HALF*2)/2)+HALF : "50%", transform:hasComp?"none":"translateY(-50%)", background:"rgba(0,0,0,0.3)", cursor:"ew-resize", zIndex:5, borderRadius:2, opacity:0 }} className="hover:opacity-100 transition-opacity" onMouseDown={e=>barDown(e,task,"right")} />}
                       {isDelay&&dur>0&&(
@@ -1859,6 +1953,16 @@ Return an array of internal keys (right side of →) in LEFT-TO-RIGHT order.`,
                 });
               })()}
               {showToday&&todayLeft>0&&todayLeft<totalW&&<line x1={todayLeft} y1={0} x2={todayLeft} y2={displayTasks.length*ROW_H} stroke="#dc3545" strokeWidth="1.5"/>}
+              {/* Last Recalc Date — the programme's data date (batch 27).
+                  Dashed orange + a label chip, so it reads as "the record is at
+                  this day" and never as "today". */}
+              {showRecalcLine && recalcLeft !== null && recalcLeft > 0 && recalcLeft < totalW && (
+                <g data-recalc-line={recalcIso}>
+                  <line x1={recalcLeft} y1={0} x2={recalcLeft} y2={displayTasks.length*ROW_H} stroke="#e88219" strokeWidth="2" strokeDasharray="7,3"/>
+                  <polygon points={`${recalcLeft-4},0 ${recalcLeft+4},0 ${recalcLeft},7`} fill="#e88219"/>
+                  <text x={recalcLeft+5} y={14} fontSize="10" fontWeight="700" fill="#e88219" stroke="#fff" strokeWidth="3" paintOrder="stroke" strokeLinejoin="round">Last Recalc {recalcIso}</text>
+                </g>
+              )}
               {/* Staircase */}
               {showStaircase && staircases.map((prog,pi)=>{
                 if(!prog.bars.length) return null;
@@ -1997,9 +2101,9 @@ Return an array of internal keys (right side of →) in LEFT-TO-RIGHT order.`,
 }
 
 // ── Cell helper ──────────────────────────────────────────────────────────────
-function C({ w, children, p = undefined, style }) {
+function C({ w, children, p = undefined, style, ...rest }) {
   return (
-    <div style={{ width:w, minWidth:w, maxWidth:w, flexShrink:0, height:"100%", borderRight:"var(--gantt-col-border, 1px solid #cecece)", overflow:"hidden", display:"flex", alignItems:"center", padding: p !== undefined ? p : undefined, ...style }}>
+    <div {...rest} style={{ width:w, minWidth:w, maxWidth:w, flexShrink:0, height:"100%", borderRight:"var(--gantt-col-border, 1px solid #cecece)", overflow:"hidden", display:"flex", alignItems:"center", padding: p !== undefined ? p : undefined, ...style }}>
       {children}
     </div>
   );

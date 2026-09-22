@@ -2,13 +2,21 @@
 # ---------------------------------------------------------------------------
 # Start every service of "P6 Reader & Converter" - macOS / Linux.
 #
+#   1. Frontend   - the app itself (Vite dev server, FRONTEND_PORT).
+#   2. Backend    - local FastAPI scaffold (BACKEND_PORT): stores projects and
+#                   programme versions for the ProjectBar.
+#   3. OCR plugin - the PP-OCR helper (default http://127.0.0.1:8199) and, via
+#                   its launcher API, the local OCR engines it can bring up
+#                   (PST-OCR :7861, Ollama :11434). This is what the Import
+#                   dialog's "Local OCR" engines talk to.
+#
 #   * Ports come from the workspace root .env only (never hardcoded, never
-#     port+1 - see AGENTS.md "Port conflict rule").
-#   * The frontend (the app itself) is started first because that is what the
-#     user needs. The local FastAPI scaffold is OPT-IN: this app talks to the
-#     Base44 cloud API and never calls it, so it is not started by default.
-#   * Opt in with START_BACKEND=1; when it runs, a failure is a WARNING only.
-#     The legacy SKIP_BACKEND=1 still means skip.
+#     port+1 - see AGENTS.md "Port conflict rule"). The OCR endpoints are not
+#     part of .env: they mirror src/lib/localOcr.js and can be overridden with
+#     OCR_LAUNCHER_URL / OCR_HELPER_CMD.
+#   * Everything starts by default. Opt out per group with SKIP_BACKEND=1 /
+#     SKIP_OCR=1 (START_BACKEND=1 is still accepted and now just means the
+#     default). Backend / OCR problems are WARNINGS only - never a hard stop.
 #
 #   * When everything is ready the app is opened in the default browser: every
 #     tool (Gantt view, import, compare, merge, export, feedback) lives on that
@@ -16,7 +24,7 @@
 #     OPEN_URLS="http://localhost:25156/docs https://..." (space separated).
 #
 # Usage:  bash scripts/start-all.sh
-#         START_BACKEND=1 bash scripts/start-all.sh
+#         SKIP_OCR=1 bash scripts/start-all.sh
 # ---------------------------------------------------------------------------
 set -uo pipefail
 
@@ -41,6 +49,11 @@ port_in_use() {
   curl -s -o /dev/null --max-time 2 "http://localhost:$port/" >/dev/null 2>&1
 }
 
+# Does the URL answer and contain the given text?
+url_has() {
+  curl -s --max-time 5 "$1" 2>/dev/null | grep -q "$2"
+}
+
 # Open a URL in the default browser (macOS "open", Linux "xdg-open").
 open_url() {
   local url="$1"
@@ -60,6 +73,7 @@ open_url() {
 
 FRONTEND_PORT="$(read_env FRONTEND_PORT "")"
 BACKEND_PORT="$(read_env BACKEND_PORT "")"
+OCR_LAUNCHER_URL="$(read_env OCR_LAUNCHER_URL "http://127.0.0.1:8199")"
 
 if [ -z "$FRONTEND_PORT" ]; then
   echo "[start-all] FRONTEND_PORT not found in $ENV_FILE - aborting." >&2
@@ -72,9 +86,10 @@ echo "========================================"
 echo "  Root      : $ROOT_DIR"
 echo "  Frontend  : http://localhost:$FRONTEND_PORT"
 echo "  Backend   : http://localhost:$BACKEND_PORT/health"
+echo "  OCR plugin: $OCR_LAUNCHER_URL (helper)"
 echo
 
-# ---- Frontend (the app) ---------------------------------------------------
+# ---- 1) Frontend (the app) ------------------------------------------------
 if port_in_use "$FRONTEND_PORT"; then
   echo "[start-all] Frontend already running on port $FRONTEND_PORT - skipping start."
   FRONTEND_PID="(already running)"
@@ -100,25 +115,16 @@ else
   echo "[start-all] Frontend is ready."
 fi
 
-# ---- Backend (local FastAPI scaffold) - OPT-IN -----------------------------
-#   Not started by default: the app talks to the Base44 cloud API and never
-#   calls this backend. Opt in with START_BACKEND=1, or run
-#   scripts/start-backend.sh in its own terminal.
+# ---- 2) Backend (local FastAPI scaffold) - started by default --------------
 echo
 BACKEND_STATE="not running"
 if [ "${SKIP_BACKEND:-0}" = "1" ]; then
   echo "[start-all] SKIP_BACKEND=1 - local backend not started."
   BACKEND_PID="(skipped)"
-elif [ "${START_BACKEND:-0}" != "1" ]; then
-  echo "[start-all] Local backend is opt-in - not started (run scripts/start-backend.sh when you need it)."
-  if curl -s --max-time 2 "http://localhost:$BACKEND_PORT/health" >/dev/null 2>&1; then
-    BACKEND_STATE="running"
-  fi
-  BACKEND_PID="(not started)"
 elif [ -z "$BACKEND_PORT" ]; then
   echo "[start-all] BACKEND_PORT not found in .env - local backend not started."
   BACKEND_PID="(skipped)"
-elif curl -s --max-time 2 "http://localhost:$BACKEND_PORT/health" >/dev/null 2>&1; then
+elif port_in_use "$BACKEND_PORT"; then
   echo "[start-all] Backend already running on port $BACKEND_PORT - skipping start."
   BACKEND_PID="(already running)"
   BACKEND_STATE="running"
@@ -135,27 +141,82 @@ else
   done
   if [ "$RETRY" -ge 30 ]; then
     echo "[start-all] WARNING: backend not up after 60s - continuing anyway."
-    echo "[start-all] The app does not need it - see the start-backend log above."
+    echo "[start-all] See the start-backend log above."
   else
     echo "[start-all] Backend is ready."
     BACKEND_STATE="running"
   fi
 fi
 
+# ---- 3) OCR plugin (PP-OCR helper + local engines) -------------------------
+# The helper is what the Import dialog's "Local OCR" engines talk to; it also
+# exposes /launch/services + /launch/start, which start the engines for us.
+OCR_STATE="not running"
+OCR_PID="(not started)"
+if [ "${SKIP_OCR:-0}" = "1" ]; then
+  echo "[start-all] SKIP_OCR=1 - OCR helper / engines not started."
+elif url_has "$OCR_LAUNCHER_URL/launch/services" "launcher"; then
+  echo "[start-all] OCR helper already running ($OCR_LAUNCHER_URL)."
+  OCR_PID="(already running)"
+  OCR_STATE="running"
+elif [ -n "${OCR_HELPER_CMD:-}" ]; then
+  echo ">>> Starting the PP-OCR helper: $OCR_HELPER_CMD ..."
+  sh -c "$OCR_HELPER_CMD" >/dev/null 2>&1 &
+  OCR_PID=$!
+  echo "[start-all] Waiting for the OCR helper (timeout 60s) ..."
+  RETRY=0
+  while [ "$RETRY" -lt 30 ]; do
+    if url_has "$OCR_LAUNCHER_URL/launch/services" "launcher"; then break; fi
+    RETRY=$((RETRY + 1))
+    sleep 2
+  done
+  if [ "$RETRY" -ge 30 ]; then
+    echo "[start-all] WARNING: OCR helper not up after 60s - continuing anyway."
+  else
+    echo "[start-all] OCR helper is ready."
+    OCR_STATE="running"
+  fi
+else
+  echo "[start-all] OCR helper not running - OCR is optional. On Windows"
+  echo "[start-all] start-all.bat starts C:\\dev\\paddle-ocr\\run-ocr-server.bat"
+  echo "[start-all] for you; here, set OCR_HELPER_CMD to the command that starts"
+  echo "[start-all] the helper (the app can also start engines on demand)."
+fi
+
+# Ask the launcher to bring every engine it knows up. It is idempotent: an
+# engine that is already running comes back as alreadyRunning = true.
+if [ "${SKIP_OCR:-0}" != "1" ] && url_has "$OCR_LAUNCHER_URL/launch/services" "launcher"; then
+  for engine in pstocr ollama; do
+    if curl -s --max-time 20 -o /dev/null \
+        -X POST -H "Content-Type: application/json" \
+        -d "{\"id\":\"$engine\"}" "$OCR_LAUNCHER_URL/launch/start" 2>/dev/null; then
+      echo "[start-all] OCR engine $engine: start requested (running engines are left alone)."
+    else
+      echo "[start-all] WARNING: OCR launcher did not answer for engine $engine - the app can start it later."
+    fi
+  done
+  OCR_STATE="running"
+fi
+
 echo
 echo "========================================"
 echo "  All services started"
-echo "  Open       : http://localhost:$FRONTEND_PORT"
+echo "  App        : http://localhost:$FRONTEND_PORT"
 if [ "$BACKEND_STATE" = "running" ] && [ -n "$BACKEND_PORT" ]; then
-  echo "  Health     : http://localhost:$BACKEND_PORT/health"
+  echo "  Backend    : running - http://localhost:$BACKEND_PORT/health"
 else
-  echo "  Backend    : not running (opt-in: bash scripts/start-backend.sh)"
+  echo "  Backend    : NOT running - run bash scripts/start-backend.sh"
+fi
+if [ "$OCR_STATE" = "running" ]; then
+  echo "  OCR plugin : running - $OCR_LAUNCHER_URL (helper + engines)"
+else
+  echo "  OCR plugin : NOT running - see the note above"
 fi
 echo "  Status     : bash scripts/status.sh"
-echo "  Stop       : bash scripts/stop-all.sh"
+echo "  Stop       : bash scripts/stop-all.sh (STOP_OCR=1 stops the OCR engines too)"
 echo "========================================"
 echo
-echo "PIDs: frontend=${FRONTEND_PID} backend=${BACKEND_PID}"
+echo "PIDs: frontend=${FRONTEND_PID} backend=${BACKEND_PID} ocr=${OCR_PID}"
 echo "Press Ctrl+C to stop the foreground log; services keep running in this shell."
 
 # Everything is ready: open the app (all tools live on that single page).

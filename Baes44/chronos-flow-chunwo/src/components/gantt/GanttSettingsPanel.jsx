@@ -9,8 +9,9 @@
 import { useState } from "react";
 import { X, BarChart3, Tag, Grid3x3, CalendarRange, Layers } from "lucide-react";
 import {
-  BAR_PRESETS, BAR_LABEL_FIELDS, MILESTONE_SHAPES, DATE_FORMATS, LINE_STYLES,
-  GROUP_FONT_SIZES, GROUP_FONT_WEIGHTS,
+  BAR_PRESETS, BAR_LABEL_FIELDS, BAR_INFO_TOGGLES, BAR_TEXT_POSITIONS, MILESTONE_SHAPES,
+  DATE_FORMATS, LINE_STYLES, WBS_FONT_FAMILIES,
+  GROUP_FONT_SIZES, GROUP_FONT_WEIGHTS, normalizeBarTextPosition, barTextFontFamilyCss,
 } from "@/lib/displaySettings";
 import { TIME_SCALES } from "@/components/gantt/UnifiedGanttLayout";
 
@@ -34,6 +35,32 @@ function Toggle({ label, checked, onChange }) {
         <span className={`absolute top-0.5 w-3 h-3 rounded-full bg-surface transition-all ${checked ? "left-4" : "left-0.5"}`} />
       </span>
     </button>
+  );
+}
+
+/**
+ * Bar Info row — the compact switch used by xerviewer.org's "Gantt Bar Info"
+ * block (batch 28): label on the left, small 20×12 switch on the right.
+ * Same markup/ids as the reference so the two panels line up.
+ */
+function SwitchRow({ id, label, checked, onChange }) {
+  return (
+    <div className="flex items-center justify-between py-1">
+      <label htmlFor={id} className="text-xs text-text-muted cursor-pointer">{label}</label>
+      <button
+        type="button"
+        id={id}
+        role="switch"
+        aria-checked={checked}
+        aria-label={label}
+        title={label}
+        onClick={() => onChange(!checked)}
+        style={{ minWidth: 20, minHeight: 12 }}
+        className={`relative inline-flex h-3 w-5 items-center rounded-full transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-primary ${checked ? "bg-primary" : "bg-surface-muted"}`}
+      >
+        <span className={`inline-block h-2 w-2 transform rounded-full shadow transition-transform duration-200 ${checked ? "bg-surface translate-x-2.5" : "bg-surface translate-x-0.5"}`} />
+      </button>
+    </div>
   );
 }
 
@@ -156,6 +183,66 @@ export default function GanttSettingsPanel({ displaySettings, onChange, viewMode
 
               <div className="border-t border-border my-3" />
 
+              {/* ── Batch 28: Gantt Bar Info — the three xerviewer.org switches.
+                     They add text to the bars themselves (screen + PDF) and stack
+                     on top of the Labels tab's field.
+                     Batch 29 adds where that text sits (inside / before / after the
+                     bar) plus its font family, size and both colours. */}
+              <Field label="Bar Info"
+                hint="Adds text onto each bar. Stacks with the Labels tab content (e.g. Item + Name + dates).">
+                {BAR_INFO_TOGGLES.map((t) => (
+                  <SwitchRow
+                    key={t.key}
+                    id={t.id}
+                    label={t.label}
+                    checked={!!(bar.info && bar.info[t.key])}
+                    onChange={(v) => setBar({ info: { ...(bar.info || {}), [t.key]: v } })}
+                  />
+                ))}
+                {label.field && label.field !== "none" && (
+                  <div className="text-[10px] text-text-muted mt-1">
+                    The Labels tab content ({label.field}) is shown first, then these parts.
+                  </div>
+                )}
+              </Field>
+
+              <Field label="Text style" hint="Applies to the bar text above (and to the Labels tab field).">
+                <div className="space-y-2">
+                  <div>
+                    <span className="text-[10px] text-text-muted">Position</span>
+                    <Sel value={normalizeBarTextPosition(label.position)} options={BAR_TEXT_POSITIONS}
+                      onChange={(v) => setBarSub("label", { position: v })} />
+                  </div>
+                  <div>
+                    <span className="text-[10px] text-text-muted">Font family</span>
+                    <Sel value={label.fontFamily || "inherit"} options={WBS_FONT_FAMILIES}
+                      onChange={(v) => setBarSub("label", { fontFamily: v })} />
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-text-muted">Text size — {label.fontSize}px</span>
+                      <button type="button" onClick={() => setBarSub("label", { fontSize: 10 })}
+                        className="text-[10px] text-primary hover:underline">Reset (10 px)</button>
+                    </div>
+                    <Rng value={label.fontSize} min={6} max={16} onChange={(v) => setBarSub("label", { fontSize: v })} />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[10px] text-text-muted w-24">On the bar</span>
+                    <Col value={label.color} onChange={(v) => setBarSub("label", { color: v })} title="Text colour on bars" />
+                    <span className="text-[10px] text-text-muted">Before / after</span>
+                    <Col value={label.colorOutside} onChange={(v) => setBarSub("label", { colorOutside: v })} title="Text colour before / after the bar" />
+                  </div>
+                  <div className="text-[10px] text-text-muted">
+                    {normalizeBarTextPosition(label.position) === "inside"
+                      ? "Inside text that does not fit moves after the bar."
+                      : "PDF uses the closest core font: mono → Courier, serif → Times, sans → Helvetica."}
+                    {barTextFontFamilyCss(label.fontFamily) ? "" : " Font: system default."}
+                  </div>
+                </div>
+              </Field>
+
+              <div className="border-t border-border my-3" />
+
               <Field label="Shadow">
                 <Toggle label="Drop shadow" checked={!!bar.shadow} onChange={(v) => setBar({ shadow: v })} />
                 {bar.shadow && (
@@ -187,22 +274,11 @@ export default function GanttSettingsPanel({ displaySettings, onChange, viewMode
               <Field label="Show label on bars">
                 <Toggle label="Enabled" checked={!!label.show} onChange={(v) => setBarSub("label", { show: v })} />
               </Field>
-              <Field label="Content">
+              <Field label="Content" hint="Text position, font family, size and colours are in the Bars tab ▸ Bar Info ▸ Text style.">
                 <Sel value={label.field} options={BAR_LABEL_FIELDS} onChange={(v) => setBarSub("label", { field: v })} />
               </Field>
-              <Field label="Position">
-                <Sel value={label.position}
-                  options={[{ value: "inside", label: "Inside the bar" }, { value: "right", label: "Right of the bar" }]}
-                  onChange={(v) => setBarSub("label", { position: v })} />
-              </Field>
-              <Field label={`Font size — ${label.fontSize}px`}>
-                <div className="flex items-center gap-2">
-                  <div className="flex-1"><Rng value={label.fontSize} min={8} max={16} onChange={(v) => setBarSub("label", { fontSize: v })} /></div>
-                  <Col value={label.color} onChange={(v) => setBarSub("label", { color: v })} title="Label colour" />
-                </div>
-              </Field>
-              {label.position === "inside" && (
-                <Field label={`Minimum bar width for the label — ${label.minWidth ?? 50}px`} hint="Inside labels are hidden on short bars.">
+              {normalizeBarTextPosition(label.position) === "inside" && (
+                <Field label={`Minimum bar width for the label — ${label.minWidth ?? 50}px`} hint="Inside labels are hidden on short bars — unless Bar Info is on, in which case the text moves after the bar.">
                   <Rng value={label.minWidth ?? 50} min={10} max={200} step={5} onChange={(v) => setBarSub("label", { minWidth: v })} />
                 </Field>
               )}

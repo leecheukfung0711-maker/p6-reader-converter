@@ -2057,7 +2057,7 @@ As an **operator**, I want **every Gantt / display setting grouped in one right-
 | **Activity List** | `ViewPresets` ＋ `ColumnVisibilityPanel`（欄位顯示／Presets） | header「Tools ▸ ViewPresets / Column Visibility」 |
 | **Timeline & Grid** | `GanttSettingsPanel` 的 grid ＋ timeline 兩段（日期格式、格線開關、時間刻度） | 「Gantt Settings ▸ Grid & Format / Timeline」＋ Display 下拉的日期格式／格線 |
 | **Gantt Bars** | `GanttSettingsPanel` 的 bars ＋ labels 兩段（Preset、Bar 外觀、標籤） | 「Gantt Settings ▸ Bars / Labels」 |
-| **Other** | 6 個顯示開關（Holiday Markers／Staircase Line／Relationship Lines／Compare Bars／Diff Only／Relation Filter）＋關係類型篩選（FS/SS/FF/SF）＋清除選取＋字級滑桿＋`GanttSettingsPanel` 的 structure 段 | header「Display」下拉整組 ＋「Gantt Settings ▸ Structure」 |
+| **Other** | 6 個顯示開關（Holiday Markers／Staircase Line／Relationship Lines／Comparison Arrows（批次 37 由 Compare Bars 改名，見該批次）／Diff Only／Relation Filter）＋關係類型篩選（FS/SS/FF/SF）＋清除選取＋字級滑桿＋`GanttSettingsPanel` 的 structure 段 | header「Display」下拉整組 ＋「Gantt Settings ▸ Structure」 |
 
 **Functional Requirements**
 - FR-1801：新增 `GlobalSettingsPanel.jsx`：右側面板＋左側 5 類圖示軌＋標題／關閉鈕；點分類即時切換內容（單一分頁顯示）。
@@ -2664,3 +2664,1710 @@ ESLint（FilterBar.jsx / GanttPage.jsx / smoke-test.mjs）0 error
   - 現行版本完整功能清單（依 UI 區域）、功能對照總表、未變更與限制、驗證與再現方式
   - 附錄 A：批次 1–22 一覽；附錄 B：差異清單（可直接用於 code review）
 - `doc\requirements.md`（本檔）— 需求、RTM（313 列）與每批次驗收證據。
+
+---
+
+## 🔧 批次 23A／23C（2026-09-21）— 右鍵手動調整 WBS Level ＋ 匯入依編號自動推導層級
+
+### 使用者回饋
+「我需要右鍵功能裏可以手動調整 WBS 的 Level 層級，**或**者 OCR 功能裏增加根據顔色區分 WBS 層級的功能。」
+→ 決定：**先做 23A（右鍵手動）＋ 23C（匯入依編號推導）**；23B（OCR 依顏色／LLM 判層級）待 A/B 實測數據出來再定。
+
+### 問題根因（既有行為）
+`doc/requirements.md`（批次 8 限制段）已載明：**WBS 階層只來自 XER 的 `PROJWBS`**；Excel／PDF／**掃描 OCR** 匯入與手動新增的 section **一律視為 Level 1**（整段同色），而且**沒有任何手動調整入口**。結果是：非 XER 來源的 programme 在畫面上完全扁平，WBS 分頁的 `To Level` 也無從作用。
+
+### 23A — 右鍵 WBS 層級控制（＋每層縮排）
+
+| 檔案 | 改動 |
+|------|------|
+| `src/components/gantt/RowContextMenu.jsx` | 標題顯示 `Programme Section · Level n`；新增區塊 `WBS Level — now n`＋**7 顆層級按鈕**（目前層級反白、`title="Already Level n"`）＋`Indent (Level +1)`／`Outdent (Level −1)`（邊界停用） |
+| `src/components/gantt/UnifiedGanttLayout.jsx` | `handleContextAction(action, payload)` 新增 3 個動作：`setSectionLevel`／`indentSection`／`outdentSection`，全部經 `clampWbsLevel()` 夾在 1–7；**表格列與甘特圖標題**的 `paddingLeft` 改為 `4/8 + wbsIndentPx(level, grp.indent, indentByLevel)` |
+| `src/lib/displaySettings.js` | `DEFAULT_DISPLAY_SETTINGS.wbs.indentByLevel = true`（新預設） |
+| `src/components/gantt/WbsSettingsPanel.jsx` | WBS 分頁新增開關 **`Indent by WBS Level`**（關閉即回復批次 23 之前的「只有顏色」外觀） |
+
+**行為**：調整層級會同時改變 **底色階（7 階配色）／縮排（12px/層）／`To Level` 分組／面板層級統計／PDF 匯出顏色**（PDF 走既有的 `resolveWbsRowStyle`）；變更進 undo/redo 與專案版本 payload。
+
+### 23C — 匯入時依 WBS 編號自動推導層級
+
+| 檔案 | 改動 |
+|------|------|
+| **新增** `src/lib/wbsLevel.js` | `clampWbsLevel()`、`levelFromTitle()`（純函式）、`inferSectionLevels(tasks,{overwrite})`、`levelStats()`、`levelStatsLabel()`、`wbsIndentPx()` |
+| `src/components/gantt/ImageImportDialog.jsx` | `handleImport()`（**所有匯入路徑的唯一出口**：Excel／PDF／掃描 OCR／XER／XML）先跑 `inferSectionLevels()`，再把統計以第 5 個參數傳給 `onImport` |
+| `src/pages/GanttPage.jsx` | `onImport(..., wbsLevelStats)` 寫入 `importReport.wbsLevels`（一般路徑與 baseline 路徑都帶）；`handleProjectLoaded()`（本機後端專案載入）同樣套用推導 |
+| `src/components/gantt/ImportStatusPanel.jsx` | 匯入報告新增 **WBS Levels** 區塊：`n of m section titles carried WBS numbering — levels derived: L1 x ／ L2 y ／ L3 z`＋提示「右鍵可手動調整」 |
+
+**支援的編號（13 個測試案例）**：`1`／`1.1`／`1.1.1`／`1.0`（尾端 `.0` 剝除 → L1）／`A.2`／`CW.1.1`（P6 WBS code）／`第1章`／`3)`／全形數字；`Contract No. DC/2023/08` 這類含冒號的抬頭**不會**被誤判。層級上限 7（超出夾住）。
+
+**安全準則（不可回歸）**
+1. **只補不覆寫**：已有 `sectionLevel`（XER 的 `PROJWBS` 階層）一律保留。
+2. **只動 section**：活動列完全不變。
+3. **不猜**：標題沒有可辨識編號 → 維持 Level 1，並在匯入報告標示數量。
+
+**驗收證據（2026-09-21 實測）**
+```
+node scripts/smoke-test.mjs → exit 0，全表 0 UNEXPECTED / 0 FAILED / 0 MISSING
+  WBS level helpers (numbering parse + inference + clamp + indent):
+      OK (parser 13 cases, inferred 3/5, clamp 1..7, indent 12px/level)
+  RowContextMenu WBS level editor (7 buttons + indent/outdent): OK (all 7 markers present)
+  ImageImportDialog vision schema (row-count guard): OK (16 row fields, 2 vision call sites)   ← 未受影響
+  GanttPage (full page render): OK (193981 chars)
+
+ESLint（wbsLevel / RowContextMenu / UnifiedGanttLayout / WbsSettingsPanel /
+        ImageImportDialog / ImportStatusPanel / displaySettings / GanttPage）0 error
+轉譯 HTTP 200：wbsLevel.js、RowContextMenu.jsx、UnifiedGanttLayout.jsx、WbsSettingsPanel.jsx、
+              ImageImportDialog.jsx、ImportStatusPanel.jsx、GanttPage.jsx
+
+修改檔案
+  src/lib/wbsLevel.js                        新增（層級解析／推導／縮排）
+  src/components/gantt/RowContextMenu.jsx    7 顆層級按鈕 + Indent/Outdent + 目前層級
+  src/components/gantt/UnifiedGanttLayout.jsx 3 個動作 + 每層縮排（表格列與甘特標題）
+  src/components/gantt/WbsSettingsPanel.jsx  Indent by WBS Level 開關
+  src/components/gantt/ImageImportDialog.jsx handleImport() 套用推導
+  src/components/gantt/ImportStatusPanel.jsx WBS Levels 匯入報告
+  src/pages/GanttPage.jsx                    onImport 統計接線 + 專案載入推導
+  src/lib/displaySettings.js                 wbs.indentByLevel 預設
+  scripts/smoke-test.mjs                     2 項新檢查（層級函式、右鍵標記）
+```
+
+### 已知限制／刻意未做
+| 項目 | 說明 |
+|------|------|
+| XER 匯出 | 仍為**原檔直通**（`_originalWbsData`），手動層級**不會**寫回 P6 `PROJWBS.parent_wbs_id` |
+| CompareDialog | 版本 B 的匯入走另一套 schema/prompt，尚未接 23C（該處 section 仍為 Level 1，可用右鍵修正） |
+| 23B（OCR 依顏色／LLM） | **尚未實作**：待以真實掃描圖做 16 vs 17 vs 18 欄 A/B 實測（確認不影響每頁抽取行數）後再定 |
+| 「重新推導層級」按鈕 | 目前只在匯入時推導；既有已載入資料可用右鍵逐列修正（可另開批次加面板按鈕） |
+
+**RTM（批次 23A／23C）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-2301 | 右鍵選單可將 section 設為 Level 1–7（含 Indent/Outdent、顯示目前層級） | `RowContextMenu.jsx` | Planner wants manual WBS level control | Verified |
+| FR-2302 | 層級變更同時影響色階、縮排、To Level 分組、統計與 PDF 匯出 | `UnifiedGanttLayout.jsx` / `resolveWbsRowStyle` | Planner wants manual WBS level control | Verified |
+| FR-2303 | 每層縮排 12px，可由 WBS 分頁開關關閉（回復舊外觀） | `displaySettings.js` / `WbsSettingsPanel.jsx` | Planner wants manual WBS level control | Verified |
+| FR-2304 | 匯入時依 WBS 編號自動推導層級（Excel／PDF／OCR／XML 全部路徑） | `wbsLevel.js` / `ImageImportDialog.jsx` | Planner wants levels detected on import | Verified |
+| FR-2305 | 推導**不覆寫** XER 既有層級、**不動**活動列、無編號不猜 | `inferSectionLevels()` | Planner wants levels detected on import | Verified |
+| FR-2306 | 匯入報告顯示推導統計與數量 | `ImportStatusPanel.jsx` | Planner wants levels detected on import | Verified |
+| NFR-2301 | 零新增相依；層級一律夾在 1–7（既有 7 階配色） | `wbsLevel.js` | Planner wants levels detected on import | Verified |
+| NFR-2302 | 預設 `wbs.indentByLevel = true` 但可關閉（可逆的外觀變更） | `displaySettings.js` | Planner wants manual WBS level control | Verified |
+| AC-2301 | 13 個編號案例解析正確（含 `1.0`→1、`CW.1.1`→3、`第1章`→1、非編號→0） | smoke-test batch 23 guard | Planner wants levels detected on import | Verified |
+| AC-2302 | 推導統計正確（inferred 3/5、kept 1、unresolved 1）且活動列不動 | smoke-test batch 23 guard | Planner wants levels detected on import | Verified |
+| AC-2303 | 右鍵選單 SSR 標記 7 項齊全（層級按鈕、Indent/Outdent、目前層級） | smoke-test batch 23 guard | Planner wants manual WBS level control | Verified |
+| AC-2304 | 縮排數學：L1→0px、L2→12px、L3(基礎 4px)→28px、關閉→4px | smoke-test batch 23 guard | Planner wants manual WBS level control | Verified |
+
+---
+
+## 🧪 批次 23B 前期實測（2026-09-21）— vision schema 欄位數 vs 抽取行數（A/B）
+
+批次 6 的教訓是「`response_json_schema` 欄位過多 → 模型只回少數行」（37 欄 → 3 行；16 欄 → 31 行），因此 23B 若要新增 `section_level` / `section_color`，**必須先實測不會掉行數**才能動 schema。
+
+### 方法（可重現）
+- 素材：真實水務 programme PDF `20231024-1046_01649 (September 2023)-4.pdf` 第 4 頁（A4 橫向），以 `pypdfium2` 渲染成 **2800×1980 JPEG q75（705 KB）**——與 App（批次 7）的渲染設定一致。
+- 呼叫路徑：`POST http://localhost:15156/api/apps/6a38f8c8aae6ce8a8b2b1096/integration-endpoints/Core/UploadFile`（FormData `file`）→ 取得 `file_url`，再 `POST .../Core/InvokeLLM`（`prompt` / `file_urls` / `response_json_schema` / `model: gemini_3_1_pro`）。
+- **Prompt 直接從 `ImageImportDialog.jsx` 的 `GANTT_PROMPT_BASE` 原文取出**，因此三個變體只有「schema 欄位數（＋對應的層級指示規則）」不同，其餘完全相同。
+- 腳本：**`Baes44\chronos-flow-chunwo\scripts\ab-vision-schema.mjs`**（`node scripts/ab-vision-schema.mjs <image> [prefix]`，日後可重跑）；原始回傳：`%TEMP%\ab1-{16-baseline,17-plus-level,18-level-colour}.json`。
+
+### 結果
+
+| 變體 | 欄位數 | **抽取行數** | sections | activities | 有 `section_level` | 有 `section_color` | 耗時 |
+|------|-------|-------------|----------|------------|-------------------|--------------------|------|
+| 16-baseline（現行 schema） | 16 | **41** | 13 | 28 | 0 | 0 | 60.7 s |
+| 17-plus-level | 17 | **41** | 12 | 29 | **12** | 0 | 53.3 s |
+| 18-level-colour | 18 | **41** | 13 | 28 | **13** | **13** | 57.3 s |
+
+**結論**
+1. **加欄位沒有掉行數**：三個變體的總行數完全相同（41），批次 6 的災難（37 欄 → 3 行）在 17–18 欄不會重現。
+2. **層級可被正確判讀**（17／18 欄皆然），且與人工判讀的 WBS 結構一致：
+   ```
+   1: 2/F-3/F MiC Installation
+   2:   2/F-3/F All Zones AS & BS
+   2:   Fitting-Out Works
+   3:     LG/F - Offices Fitting-Out
+   3:     G/F - Laboratory/ Vistory Rece
+   ```
+3. **顏色欄位有抓但不足以單獨判層級**：抓到的色帶為 `light green` / `light yellow` / `light blue`，但 `light green` 同時出現在 Level 1 與 Level 2 → 顏色適合作為「顯示忠實度／除錯」資訊，**層級仍應以編號與縮排為主**（與 23C 的 `levelFromTitle()` 互補：23C 先判，LLM 只補缺口）。
+4. 每次呼叫約 53–61 秒（與現況同級，沒有變慢）。
+
+**建議實作方式**：採用 **17 欄（只加 `section_level`）** 為主的 B1 精簡版（風險最低、已證明不掉行數）；`section_color` 列為選配，若要做視覺除錯再加。
+
+**RTM（批次 23B 前期實測）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| AC-23B1 | 新增 1–2 個 vision 欄位不得降低每頁抽取行數（41 vs 41 vs 41） | `scripts\smoke-test.mjs` guard + A/B harness | Planner wants levels detected on import | Verified |
+| AC-23B2 | LLM 能依編號／縮排／色帶判出 section 層級（與人工判讀一致） | A/B harness（`ab1-17-plus-level.json`） | Planner wants levels detected on import | Verified |
+| AC-23B3 | 顏色不足以單獨決定層級 → 顏色僅作輔助 | A/B harness（`ab1-18-level-colour.json`） | Planner wants levels detected on import | Verified |
+
+---
+
+## 🤖 批次 23B（2026-09-21）— 掃描／OCR 匯入由模型判讀 WBS 層級與色帶
+
+### 決策
+A/B 實測（見上節）顯示 17／18 欄都不掉行數 → 使用者選擇 **B1 完整 18 欄版**（`section_level` ＋ `section_color`）。
+
+### 實作
+
+| 檔案 | 改動 |
+|------|------|
+| `src/components/gantt/ImageImportDialog.jsx` | `GANTT_VISION_TASK_SCHEMA` 16 → **18 欄**；新增 `GANTT_VISION_PROMPT_SUFFIX`（層級＋顏色判讀規則）並**只套用於 2 個 vision 呼叫點**（文字／Excel 路徑完全不受影響）；`aiResultToTasks()`：`section_level` → `aiSectionLevel`（**hint**）、`section_color` → `sectionColorName` |
+| `src/components/gantt/CompareDialog.jsx` | 掃描比對的 vision schema 同步（14 → 16 欄）＋同一組規則；同樣對應 `aiSectionLevel` / `sectionColorName` |
+| `src/lib/wbsLevel.js` | 推導順序定為 **① 標題編號（決定性，23C）→ ② `aiSectionLevel`（模型判讀，23B）→ ③ 不猜**；統計新增 `fromTitle` / `fromAi` |
+| `src/components/gantt/ImportStatusPanel.jsx` | 匯入報告拆出來源：「… got a level — *n* from the title numbering and *m* from the WBS bands on the chart — L1 x ／ L2 y ／ L3 z」 |
+| `src/pages/GanttPage.jsx` | CompareDialog 的版本 A／B 匯入也套用同一推導 |
+| `scripts/smoke-test.mjs` | schema guard 由「≤18」收緊為「**恰好 18**（A/B 驗證上限）」＋檢查兩個 vision prompt 都套用 `GANTT_VISION_PROMPT_SUFFIX`＋欄位確實對應到 `aiSectionLevel`；推導測試新增「AI hint 補位」與「編號優先於 AI」案例 |
+| `scripts/ab-vision-schema.mjs` | A/B 工具改為直接從原始碼抽出 `GANTT_PROMPT_BASE` / `GANTT_VISION_PROMPT_SUFFIX`，因此 variant 18 ＝ **App 實際上線的 prompt + schema**；新增第 4 個參數「只跑指定變體」（例：`… ab5 18`）以便重測 |
+| `ImageImportDialog.jsx`（防護） | 新增 `invokeVisionLLM()` 統一兩個 vision 呼叫點，並在回答行數 `< VISION_MIN_ROWS (=2)` 時**自動重試一次**（取較大者），進度列顯示 `only 1 row(s) read — retrying once...` |
+
+### 推導順序（單一真相）
+
+```
+① XER PROJWBS 已有層級        → 保留（永不覆寫）
+② 標題帶 WBS 編號             → levelFromTitle()（決定性，可重現）
+③ 模型判讀的 section_level     → clamp 到 1–7 後採用（只在 ② 無值時）
+④ 以上皆無                    → 維持 Level 1，並在匯入報告標示「無法辨識」
+＋ 使用者右鍵手動修正（23A）永遠可覆蓋以上任何結果
+```
+
+### 驗收證據
+
+- 煙霧測試：**67 項 OK、0 FAILED／0 UNEXPECTED／0 MISSING**，其中
+  `ImageImportDialog vision schema (row-count guard): OK (18 row fields — the A/B-verified ceiling, 2 vision call sites, fidelity rule, WBS level/colour rules on both vision prompts, fields mapped to aiSectionLevel)`
+- ESLint：**0 error**（27 個既有 warning）
+- 轉譯 HTTP 200：`wbsLevel.js`／`RowContextMenu.jsx`／`ImageImportDialog.jsx`／`CompareDialog.jsx`／`ImportStatusPanel.jsx`／`GanttPage.jsx`／`UnifiedGanttLayout.jsx`
+- **上線設定 A/B 重跑**（同一張圖、variant 18 ＝ App 實際 prompt＋schema，`scripts/ab-vision-schema.mjs <img> <prefix> 18`）：
+
+  | 回合 | prompt 來源 | 抽取行數 | 耗時 |
+  |------|-------------|---------|------|
+  | ab1 | 第一版規則（層級＋顏色併寫） | **41** | 57.3 s |
+  | ab2 | 上線 `GANTT_VISION_PROMPT_SUFFIX` | **1** ⚠️ | **4.4 s** |
+  | ab3 | 上線 `GANTT_VISION_PROMPT_SUFFIX` | **41** | 62.6 s |
+  | ab4 | 上線 `GANTT_VISION_PROMPT_SUFFIX` | **41** | 53.6 s |
+
+  → **4 次中 3 次 41 行**；ab2 那次 4.4 秒只回 1 行、`section_level=0`／`section_color="white"`，屬 **API／模型層瞬時塌陷**（同一段 prompt 的 17 欄變體在同一回合回 41 行，故非 schema 造成）。
+  → 樣本數小（4 次），**無法完全排除低機率抖動**，因此新增了自動重試防護（見下）。
+
+### 刻意界線（不可回歸）
+
+1. `section_color` **只**存為 `sectionColorName`（來源色帶名稱，供除錯／追溯），**不**改寫 `sectionBg`、也不參與配色方案。
+2. 模型值永遠只是 hint：XER `PROJWBS` 與 23C 編號推導優先。
+3. 文字／Excel 路徑的 schema **不加**欄位（那裡看不到色帶，編號由 23C 決定性處理）。
+4. XER 匯出仍為原檔直通 —— 手動／推導的層級**不會**寫回 P6 `PROJWBS.parent_wbs_id`。
+
+**RTM（批次 23B）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-23B1 | 掃描／OCR 匯入可取得 section 層級（`section_level`） | `ImageImportDialog.jsx` / `CompareDialog.jsx` vision schema | Planner wants levels detected on import | Verified |
+| FR-23B2 | 掃描／OCR 匯入可取得來源色帶（`section_color`） | 同上（`sectionColorName`） | Planner wants levels detected on import | Verified |
+| FR-23B3 | 層級判定順序：XER → 編號 → 模型 hint → 不猜 | `wbsLevel.js` `inferSectionLevels()` | Planner wants levels detected on import | Verified |
+| FR-23B4 | 匯入報告顯示層級來源拆分 | `ImportStatusPanel.jsx` | Planner wants levels detected on import | Verified |
+| NFR-23B1 | 欄位數上限 18，且不得降低抽取行數（A/B 舉證） | `scripts/ab-vision-schema.mjs` + smoke guard | Planner wants levels detected on import | Verified |
+| NFR-23B2 | 文字／Excel 路徑 schema 不變（零回歸） | smoke guard（18 欄只算 vision schema） | Planner wants levels detected on import | Verified |
+| AC-23B4 | 兩個 vision 呼叫點都套用層級規則（`GANTT_VISION_PROMPT_SUFFIX` × 3 出現 = 1 定義＋2 使用） | smoke-test batch 23 guard | Planner wants levels detected on import | Verified |
+| AC-23B5 | 欄位確實映射到 task（`aiSectionLevel` / `sectionColorName`）且經 `inferSectionLevels` | smoke-test batch 23 guard | Planner wants levels detected on import | Verified |
+| FR-23B5 | 低行數（< 2）自動重試一次，取較大者；進度列提示 | `ImageImportDialog.jsx` `invokeVisionLLM()` | Planner wants levels detected on import | Verified |
+
+> 尚未處理（刻意）：若模型連續兩次都只回極少行，App 仍會以該結果匯入（不阻擋使用者）；目前只在進度列提示重試。
+
+---
+
+## 🧩 批次 24（2026-09-21）— 逐頁文字匯入（修「內容缺漏」根因）
+
+### 使用者回報
+> 「我測試了兩次，兩次的結果都有内容不同缺漏問題，能更仔細的逐頁進行 OCR 嗎？」
+
+### 根因（實測舉證，非推論）
+- 測試檔 `6WSD21-DP_202409 (1).pdf`：**27 頁 A3、有文字層**（每頁 3,000–4,400 字）→ 走**文字路徑**（不是視覺路徑；`detectTrueRotation`／vision 完全沒參與）。
+- 舊程式只有一個呼叫，且把整份文字**硬切在 24,000 字元**：
+  `prompt: ...\n\nText content:\n${nativeText.substring(0, 24000)}`
+- 實測：整份 **98,799 字、614 個活動 ID**；前 24,000 字僅含 **213 個 ID（34.7%）**、以字元計僅 **24.3%**。
+  → **約 3/4 的 programme 永遠不可能被匯入**；且在可見的前段內，每次保留哪些列還會變動 → 使用者看到「兩次缺的內容都不一樣」。
+- 同類 bug 也存在于 Excel AI 備援路徑：`parseExcelWithAI()` 把所有工作表串接後 `substring(0, 20000)` → 後面工作表整批消失。
+
+### 修法：逐頁對齊分批（page-aligned batching）
+
+| 檔案 | 改動 |
+|------|------|
+| **新增** `src/lib/textChunks.js` | `planTextChunks()`（頁對齊分批：≤12,000 字且 ≤3 頁）、`splitLongText()`（超長頁／工作表按行切分，不丟尾）、`mergeChunkTasks()`（依文件順序合併＋精確去重）、`mapWithConcurrency()`（3 併發、**回傳順序保持文件順序**）、`looksLikeProgrammeText()`（判斷空白批次是否值得重試） |
+| `ImageImportDialog.jsx`（PDF 文字路徑） | `extractNativePDFTextByPage()` 保留頁邊界 → `splitLongText()` → `planTextChunks()` → **每批一次模型呼叫**（prompt 明示「part x of n、pages a–b、其他批次另行處理、不可摘要」）→ `mergeChunkTasks()`；單批 0 列但看似表格時自動重試一次；進度列逐批回報 `Parsed pages 4-6 (batch 2/10) — 21 row(s)` |
+| `ImageImportDialog.jsx`（Excel AI 備援） | 改為逐工作表／逐段分批＋合併，移除 20,000 字截斷 |
+| `ImportStatusPanel.jsx` + `GanttPage.jsx` | 匯入報告新增 **Source Coverage** 區塊（文字／掃描／單圖／Excel／內嵌資料五態）：`All 27 page(s) sent in 10 batch(es) · 98,799 characters · N rows read` |
+
+### 驗收證據（2026-09-21 實測）
+- **真實 27 頁檔驗算**（套用與 App 相同的分批規則）：
+  `batches: 10 · pages covered: 27 of 27 · max batch chars: 11,545 · first/last: [1,2,3] … [25,26,27]`
+  舊制 24,000 字 ＝ **24.3%** ；新制 **100%（98,799 字）**
+- **端到端實測（新流程、真實資料）**：取第 **10–12 頁**（舊制因截斷**從來沒送出過**的區段），用 App 相同的 `extractNativePDFTextByPage` 演算法（`scripts/pdf-page-text.mjs`）取出文字後走新批次流程：
+  - 真實內容：**97 個活動列**（+ 摘要列）
+  - 模型回傳：**120 列（97 活動 + 23 摘要）** ＝ 近乎全數回收 ✓
+  - 該批 10,650 字、37 欄 schema、耗時 **242.8 秒** → 由此推算整份 27 頁（10 批、併發 5）約 **8–16 分鐘**
+- **煙霧測試 69 項 OK、0 失敗**，含兩項新 guard：
+  - `textChunks (page-aligned batches + merge + order-preserving pool): OK (27 pages → 9 batches of ≤3 pages, merge dedupes repeats, order kept, long text split without loss)`
+  - `ImageImportDialog text/Excel paths (per-page batching, no 24k/20k truncation): OK` ← 回歸 guard：原始碼中不得再出現 `substring(0, 24000)` 或 `substring(0, 20000)`
+- ESLint **0 error**；`textChunks.js`／`ImageImportDialog.jsx`／`ImportStatusPanel.jsx`／`GanttPage.jsx` 轉譯 HTTP 200
+
+### 取捨（必須揭露）
+1. **呼叫次數與時間**：27 頁由 **1 次 → 10 次**（併發 5）。單批實測約 **4 分鐘**（輸出量大：37 欄 × ~120 列），整份估 **8–16 分鐘**；內容完整但明顯變慢。進度列會逐批顯示（`Parsed pages 4-6 (batch 2/10) — 21 row(s)`），不會像以前一樣「看似完成卻少了大半」。
+   可再優化的方向（未做）：文字路徑改用品瘦 schema（批次 6 對 vision 做過類似精簡）、或分成「快速前 24k 先出結果、其餘背景續跑」。
+2. **分帶（band）實驗已做過並否決**：把同一頁切 3 條水平帶分別判讀，只多抓到 **1** 列、卻漏掉 **12** 個 section 列（工具：`scripts/vision-band-recall.mjs`）。因此掃描路徑維持「整頁 ＋ 低行數自動重試」，不採分帶。
+3. 若單批仍回 0 列，最多重試一次後照原樣匯入（不阻擋使用者），並在報告中呈現列數。
+
+**RTM（批次 24）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-2401 | PDF 文字路徑必須送達**全部頁面**（不得截斷整份文件） | `textChunks.js` + `ImageImportDialog.jsx` | Planner wants every activity imported | Verified |
+| FR-2402 | 分批須為頁對齊、保持文件順序，且合併時去重 | `planTextChunks()` / `mergeChunkTasks()` | Planner wants every activity imported | Verified |
+| FR-2403 | 超長頁／工作表按行切分，不丟尾部文字 | `splitLongText()` | Planner wants every activity imported | Verified |
+| FR-2404 | Excel AI 備援同樣分批（移除 20,000 字截斷） | `parseExcelWithAI()` | Planner wants every activity imported | Verified |
+| FR-2405 | 匯入報告顯示來源覆蓋率（頁數／批次／字元／列數） | `ImportStatusPanel.jsx` | Planner wants every activity imported | Verified |
+| FR-2406 | 空白批次（看似表格）自動重試一次 | `looksLikeProgrammeText()` | Planner wants every activity imported | Verified |
+| NFR-2401 | 併發 5、回傳順序＝文件順序（否則列序會亂） | `mapWithConcurrency()` | Planner wants every activity imported | Verified |
+| NFR-2402 | 原始碼不得再出現 `substring(0, 24000)` / `substring(0, 20000)` | smoke-test batch 24 guard | Planner wants every activity imported | Verified |
+| AC-2401 | 27 頁真實檔：10 批、27/27 頁、單批 ≤12,000 字 | 批次實測（見上） | Planner wants every activity imported | Verified |
+
+---
+
+## 🔒 批次 12 補強（2026-09-21）— 「重新上傳瞬間還原」的保證強化
+
+使用者回饋：
+> 「如果是已經有 metadata 內嵌完整資料 + 重新上傳瞬間還原，那就不用特別弄注脚了，能保證重新上傳瞬間還原的功能就行。」
+
+→ 因此**不做 PDF 上的可見注脚**，改為把「瞬間還原」這條路徑做**稽核與加固**。
+
+### 稽核發現（三個縫隙）
+| # | 發現 | 處置 |
+|---|------|------|
+| 1 | `exportGanttPDF(options)`（早期公開入口）**不會內嵌資料** → 任何未來的呼叫端都會產出「無法瞬間還原」的 PDF | 改為 `async`，自動 `encodeTasksForPDF(options.tasks)`（有 `embedData` 時沿用），＝「本模組產出的 PDF 一律帶標記」 |
+| 2 | 匯入報告的 **Source Coverage** 區塊條件是 `coverage.pages > 0`，而內嵌還原沒有 `pages` → **恰恰在「瞬間還原」時不顯示** | 條件改為 `coverage` 有值即顯示；內嵌時明確標示 `🔖 Instant restore — this PDF carried the full programme (N rows, every field). No AI reading was needed.` |
+| 3 | 第三方 PDF／被其他工具重存的 PDF 會靜默走 AI 讀取，使用者不知道「為什麼這次少了很多」 | 非內嵌來源時，報告加註：`No embedded data in this file …` ＋ `Tip: a PDF exported by this app re-imports instantly and losslessly. Re-saving or printing this file with another tool strips that marker.` |
+
+### 新增驗收：真實規模的來回測試
+既有測試只有 **4 列**，無法證明多 chunk（`Subject = chunk 0`、`Keywords = overflow`）在真實規模下可行。新增 **600 列 × 全欄位** 測試（含繁中、長名稱、`links[]`、baseline、actuals、constraint、section 列）：
+
+```
+PDF embedded data round trip (600 rows, multi-chunk payload): OK
+  (600 rows, 379,328 bytes JSON → 26,678 chars in 7 chunks, 15 page(s), every field identical)
+```
+
+→ 證明 **379 KB 的 programme（gzip 後 26.7 k 字元）寫進 PDF metadata 再讀回，逐欄位完全相同**；7 個 chunk 的溢出機制正常。
+
+### 稽核確認（無縫隙的部分）
+- 匯出端**只有** `ExportDialog.handleExportPDF` 一條路徑，且 **Preview 與下載用的是同一份 bytes**（`pdfDocRef`）→ 預覽看到的檔案就是會帶標記的檔案。
+- `src` 內除了 `exportGanttPDF.js` 之外**沒有**其他 jsPDF 使用點 → 沒有第二條漏掉標記的產出路徑。
+- 匯入端 `processPDF` 的順序是 **① metadata 內嵌 → ② 文字分批 → ③ 逐頁 vision** ✓，內嵌命中時完全不呼叫 AI。
+- 舊格式 `GANTT_DATA_V2`（未壓縮）仍可解 → 既有檔案不會失效。
+
+### 已知邊界（誠實揭露）
+- 若 PDF 被**第三方工具重存／列印成 PDF／線上轉檔**，Info 字典可能被清掉 → 該檔就無法瞬間還原，會退回 AI 讀取（此時報告會顯示 `No embedded data`）。這是 PDF 格式層面的限制，無法從本 App 端阻止。
+- 600 列實測通過；理論上限取決於 PDF Info 字串長度（本次 26.7 k 字元無問題）。若日後遇到數千列以上的專案，建議再跑一次同等規模驗證（測試已內建於煙霧測試）。
+
+**RTM（批次 12 補強）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-1205 | 本模組任何匯出入口都必須內嵌資料（含 legacy `exportGanttPDF`） | `exportGanttPDF.js` | Planner wants instant lossless re-import | Verified |
+| FR-1206 | 內嵌還原時匯入報告必須明確顯示「瞬間還原」 | `ImportStatusPanel.jsx` | Planner wants instant lossless re-import | Verified |
+| FR-1207 | 非內嵌來源必須說明原因並提示標記會被第三方工具清除 | `ImportStatusPanel.jsx` | Planner wants instant lossless re-import | Verified |
+| AC-1205 | 600 列全欄位真實規模來回（多 chunk）逐欄位完全相同 | smoke-test batch 12 guard | Planner wants instant lossless re-import | Verified |
+| AC-1206 | 無標記 PDF 仍回 `null`（走 AI）／舊 V2 可解 | smoke-test batch 12 guard | Planner wants instant lossless re-import | Verified |
+
+---
+
+## 🔁 批次 25（2026-09-21）— 逐頁雲端讀取 ＋ 本地 OCR 交叉復核（疑似缺漏就單頁重讀並插回原位）
+
+### 使用者需求
+> 「逐頁OCR，在交予Base44的LLM的同時，也啓動本地OCR進行逐頁對照復核，如果出現某一頁的大幅度缺漏，就對該頁的内容重新進行一次單獨的再OCR處理，然後插回原本位置」
+
+### 本地通道選型（**實測後**定案，不是推測）
+| 通道 | 單頁耗時 | ID 品質 | 結論 |
+|------|---------|---------|------|
+| Ollama `ovisocr2:bf`（已在跑，port 11434，CORS 可用） | >4 分鐘仍未完成 | — | ✗ 太慢 |
+| PaddleOCR 全頁 2800px（PP-OCRv6 medium） | >4 分鐘 | 多錯字 | ✗ |
+| PaddleOCR 全頁 1400px（PP-OCRv5 mobile） | 88.3 秒 | 15/29，含錯字（`WSD-MC-1790`） | △ |
+| **PaddleOCR 左側 ID 欄細條 616×1980（原生解析度）** | **34.6 秒** | **20/20 全對、零錯字** | ✅ 採用 |
+
+復核只需要「這頁有哪些活動 ID」，而 ID 全在左側那一欄；細條保持原生解析度 → 又快又準。
+
+### 新增元件
+| 檔案 | 內容 |
+|------|------|
+| **新增 `C:\dev\paddle-ocr\ocr_server.py`** | PP-OCR 的**零相依** HTTP 包裝（純標準庫 `ThreadingHTTPServer`）：`GET /health`、`POST /ocr`（base64 JSON → `lines`/`text`/`ms`）、`POST /ocr/file`；CORS 回呼 origin（瀏覽器可直呼）；`PADDLE_OCR_VERSION=PP-OCRv5`（mobile，預設）／`PP-OCRv6`（高精度但 >2 分鐘/頁）；模型只載入一次、推論加鎖。啟動：`C:\dev\paddle-ocr\run-ocr-server.bat`（port 8199） |
+| **新增 `src/lib/localOcr.js`** | `foldOcrId()`（大小寫／分隔符＋ OCR 混淆折疊 O↔0、I/L↔1、S/Z↔5、B↔8）、`extractActivityIds()`（三段式 ID 如 `WSD-W-ELS-1470` 要抓到；`BR1`／`A1` 這種表格格不算）、`comparePageCoverage()`（判定規則見下）、`cropIdColumn()`（左 22% 細條裁切）、`probeLocalOcr()` / `readPageLocally()`（含逾時；服務不在＝回 `null`，**絕不讓匯入失敗**）、`buildRecoveryPrompt()`、`mergeRecoveredRows()`（**插回原位**）；設定持久化於 `gantt_local_ocr` |
+| `src/components/gantt/ImageImportDialog.jsx` | 每個掃描頁在送出雲端 vision 的**同時**啟動本地細條 OCR（`Promise.all`，只等較慢的一方）；`crossCheckPage()` 比對後若判定缺漏 → **單頁重讀**（同一張圖＋本地 OCR 文字當檢核清單＋缺漏 ID 清單）→ `mergeRecoveredRows()` 插回**該頁原本位置**；單圖匯入路徑同樣處理；UI 新增 `Local OCR cross-check` 開關＋服務位址＋狀態燈（off／checking／ready（引擎版本、每頁約 35 秒）／not reachable） |
+| `src/components/gantt/ImportStatusPanel.jsx` | 匯入報告新增一行：`Local OCR cross-check: N page(s) verified against a local OCR pass · M page(s) re-read → +X row(s) recovered, Y row(s) completed`；服務沒開則顯示 `service not reachable — pages were not verified` |
+
+### 判定門檻（常數，可調）
+`OCR_MISSING_RATIO = 0.4`、`OCR_MIN_MISSING = 3`、`OCR_MIN_LOCAL_IDS = 5`
+→ 本地讀到的 ID 中有 **≥40% 且 ≥3 個**不在雲端結果裡 ⇒ 觸發單頁重讀；本地只讀到 **<5 個 ID** ⇒ 視為訊號不足、不觸發（避免 OCR 噪聲造成無謂重讀）。
+
+### 驗收證據
+```
+煙霧測試：71 項 OK / 0 FAILED，其中
+  localOcr (fold + id extraction + short-page verdict + splice back):
+    OK（1 列 vs 6 個本地 ID → 83% 缺漏 → 需重讀；完整答案不重讀；本地僅 2 個 ID → 不重讀；
+        插回順序 A-1,A-2,A-3,A-4、既有列只補空白欄位）
+ESLint 0 error ｜ localOcr.js／ImageImportDialog.jsx／ImportStatusPanel.jsx 轉譯 HTTP 200
+本地服務實測：GET /health 首次 6.9 s（載入模型）、其後 0.0 s；
+              POST /ocr 細條 34.6 s／80 行／20 個 ID 全對（對照雲端同頁 29 個 ID）
+```
+
+### 已知限制（誠實揭露）
+1. **服務沒開也能匯入**：只有雲端讀取，報告標示 `service not reachable`。
+2. **時間**：本地每頁約 35 秒（CPU）且與雲端**並行** → 單頁耗時＝兩者較慢者；27 頁約十幾分鐘。可在匯入對話框關閉。
+3. **本地引擎會漏讀**（此頁 20/28）→ 只用來「發現大幅缺漏」，**不用來取代雲端**；因此 OCR 錯字不會寫進資料（重讀仍以雲端 vision 為準，本地文字僅作檢核清單）。
+4. 重讀只針對被標記的頁面，且新列只插在該頁範圍內；既有列僅補空白欄位，不覆寫。
+
+**RTM（批次 25）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-2501 | 每個掃描頁在送雲端 LLM 的同時啟動本地 OCR（並行） | `ImageImportDialog.jsx` | Planner wants each page double-checked | Verified |
+| FR-2502 | 以「ID 覆蓋率」判定單頁大幅缺漏（≥40% 且 ≥3 個） | `comparePageCoverage()` | Planner wants each page double-checked | Verified |
+| FR-2503 | 被標記的頁面單獨重讀一次（雲端 vision ＋ 本地文字檢核清單） | `buildRecoveryPrompt()` / `crossCheckPage()` | Planner wants each page double-checked | Verified |
+| FR-2504 | 重讀結果**插回該頁原本位置**，既有列不覆寫只補空白 | `mergeRecoveredRows()` | Planner wants each page double-checked | Verified |
+| FR-2505 | 本地服務位址／開關可由使用者設定並記憶 | `localOcr.js` / import dialog UI | Planner wants each page double-checked | Verified |
+| FR-2506 | 匯入報告顯示復核與重讀統計 | `ImportStatusPanel.jsx` | Planner wants each page double-checked | Verified |
+| NFR-2501 | 本地服務不可用時匯入照常、不得報錯 | `readPageLocally()` 回 null | Planner wants each page double-checked | Verified |
+| NFR-2502 | 本地 OCR 只作檢核，不以其文字寫入資料（避免 OCR 錯字污染） | 重讀仍走雲端 vision | Planner wants each page double-checked | Verified |
+| NFR-2503 | 零新增前端相依；本地服務為零相依標準庫實作 | `ocr_server.py` | Planner wants each page double-checked | Verified |
+| AC-2501 | 1 列 vs 6 本地 ID → 83% → 需重讀；完整答案 → 不重讀 | smoke-test batch 25 guard | Planner wants each page double-checked | Verified |
+| AC-2502 | 插回原位：A-1 補空白、A-2/A-4 插在相鄰位置、順序保持 | smoke-test batch 25 guard | Planner wants each page double-checked | Verified |
+| AC-2503 | 本地細條 OCR 20/20 ID 全對、34.6 s/頁（實測） | 本地服務實測（2026-09-21） | Planner wants each page double-checked | Verified |
+
+---
+
+## 🎛 批次 25b（2026-09-21）— 本地 OCR 引擎可自選、可對照
+
+### 使用者需求
+> 「我能怎麽去自主選擇使用哪種本地 OCR 進行測試？」
+
+### 做法
+| 檔案 | 內容 |
+|------|------|
+| `src/lib/localOcr.js` | 新增引擎註冊表 `LOCAL_OCR_ENGINES` 與 `engineById()`：**① PP-OCR 服務**（`ocr_server.py`，`:8199`）、**② Ollama 本機模型**（`:11434`，需選模型）、**③ PST-OCR 服務**（OvisOCR2，`:7861`）。`probeLocalOcr()` / `readPageLocally()` 依引擎分派到各自 API 形狀：PP-OCR `GET /health` + `POST /ocr {image}`、Ollama `GET /api/tags` + `POST /api/generate {model,prompt,images,stream:false}`、PST-OCR `GET /health` + `POST /ocr/base64 {data}`（回 `{markdown,text,pages}`）。設定改為 `{enabled, engine, url, model}`（`gantt_local_ocr`） |
+| `src/components/gantt/ImageImportDialog.jsx` | UI 改為 **引擎下拉＋模型輸入（Ollama，附 `/api/tags` 的 datalist 建議）＋位址輸入＋狀態燈**；切換引擎會自動帶入該引擎的預設位址；狀態顯示 `ready — <engine> <version>（N 個模型）` 或 `not reachable — <該引擎的啟動提示>` |
+| **新增 `scripts/local-ocr-compare.mjs`** | 用 **App 同一份適配器**（Vite SSR 載入 `src/lib/localOcr.js`）在同一張圖上跑各引擎，輸出 **耗時／行數／ID 數／樣本** 表格；自動裁左側 22 % 細條（Node 無 canvas，改用 Paddle venv 的 Pillow）；`--engines`、`--model`、`--timeout` 可調 |
+
+### 實測（同一頁 `20231024-1046_01649` 第 4 頁、左側 ID 欄細條 616×1980、本機 CPU）
+| 引擎 | 耗時 | 行數 | ID 數 | 備註 |
+|------|------|------|-------|------|
+| **PP-OCR 服務（PP-OCRv5 mobile）** | **35.4 s** | 80 | **21**（乾淨，零錯字） | 建議預設 |
+| **Ollama（`ovisocr2:bf`）** | **77.0 s** | 10 | **29**（舊過濾器；新過濾器會更乾淨） | 已在本機運行、零設定，但慢一倍 |
+| **PST-OCR 服務（OvisOCR2）** | 服務未啟動（`fetch failed`，3 ms 內判定） | — | — | 需先跑 portable 服務 |
+
+> 註：先前量到 Ollama「>4 分鐘」是**整頁 2800px**；改用**細條**後降到 77 秒，因此 Ollama 也是可用選項。
+
+### 同時修正（精度）
+1. **ID 抽取精度**：加入「**末段必須是數字**」規則（P6 ID 都以數字結尾，如 `WSD-W-ELS-1470`）；修正前細條 OCR 的 42 個「ID」含活動名稱片段（`F_MiCZoneJ1a-M1F01B`）→ 修正後 **21 個全部乾淨**。未修正會造成幽靈缺漏、白白重讀。
+2. `blobToBase64()` 支援 Node（`FileReader` 只在瀏覽器存在）→ 腳本與測試可共用同一份程式碼。
+3. `readPageLocally()` 回報服務端 `ms`。
+
+### 驗收證據
+```
+煙霧測試：72 項 OK / 0 FAILED
+  localOcr (fold + id extraction + short-page verdict + splice back): OK
+  localOcr engines (registry + adapters + graceful failure):
+    OK (3 engines: ppocr/ollama/pstocr; dead endpoint → null, no throw)
+ESLint 0 error ｜ localOcr.js、ImageImportDialog.jsx 轉譯 HTTP 200
+引擎對照實測（見上表）
+```
+
+### 怎麼選（給使用者的操作路徑）
+1. **同一張圖比一比**：`node scripts/local-ocr-compare.mjs <圖檔> --engines ppocr,ollama,pstocr --model ovisocr2:bf`
+2. **App 內切換**：Import 對話框底部 → `Local OCR cross-check` 勾選 → 下拉選引擎（Ollama 要填模型，狀態燈會列出可用模型）→ 位址自動帶入 → 下次匯入即套用（設定記憶在本機）
+3. **看結果**：匯入報告的 `Local OCR cross-check` 一行會顯示該次使用哪個引擎、驗證幾頁、重讀幾頁、補回幾列
+
+**RTM（批次 25b）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-2507 | 使用者可在 App 內選擇本地 OCR 引擎（PP-OCR／Ollama／PST-OCR）並記憶 | `localOcr.js` + import dialog | Planner wants to choose the local OCR engine | Verified |
+| FR-2508 | 各引擎以各自的 API 形狀驅動，回傳統一格式（lines/text/ids/engine） | `probeLocalOcr()` / `readPageLocally()` | Planner wants to choose the local OCR engine | Verified |
+| FR-2509 | 提供離線對照工具，同圖量測各引擎的耗時與 ID 召回 | `scripts/local-ocr-compare.mjs` | Planner wants to choose the local OCR engine | Verified |
+| NFR-2504 | 未啟動／不可達的引擎必須快速判定且不影響匯入 | 死埠測試（3 s 內回 null／`available:false`） | Planner wants to choose the local OCR engine | Verified |
+| AC-2504 | ID 抽取不得把活動名稱片段當 ID（42 → 21，末段須為數字） | smoke-test batch 25 guard | Planner wants to choose the local OCR engine | Verified |
+| AC-2505 | 三引擎實測數據（35.4 s/21 IDs；77.0 s/29 IDs；服務未啟動） | 引擎對照（2026-09-21） | Planner wants to choose the local OCR engine | Verified |
+
+---
+
+## 🎛 批次 25c（2026-09-21）— 本地 OCR 引擎切換的**位置**（可發現性）
+
+使用者回饋：
+> 「我在前端頁面内的哪裏可以自己選擇切換使用的本地OCR？」
+
+→ 原本只放在**匯入對話框最下方**（不易發現），因此抽出共用元件並**同時掛在 Global Settings**。
+
+### 做法
+| 檔案 | 內容 |
+|------|------|
+| **新增 `src/components/gantt/LocalOcrSettings.jsx`** | 把開關／引擎下拉／模型輸入／位址輸入／狀態燈抽成**共用元件**（自己讀寫 `gantt_local_ocr` 並自行探測服務） |
+| `src/components/gantt/ImageImportDialog.jsx` | 匯入對話框底部改為掛載 `<LocalOcrSettings />`；匯入時**即時重讀設定**（`loadLocalOcrSettings()`），因此在任一處改動都會在下次匯入生效 |
+| `src/components/gantt/GlobalSettingsPanel.jsx` | **Global Settings → Other** 最上方新增區塊 `Local OCR (scan verification)`，掛載同一元件 |
+
+### 兩個入口（都在前端頁面內）
+1. **設定面板**：工具列的 **Settings** → 左側分類 **Other** → 最上方 **Local OCR (scan verification)**
+2. **匯入對話框**：按 **Import**（或拖入檔案）→ 視窗**最下方**、按鈕列（Download Template／Cancel／Confirm Import）**下面**那一行
+
+兩處操作的是同一份設定（localStorage），改一處另一處下次開啟即同步。
+
+### 驗收證據
+```
+煙霧測試：73 項 OK / 0 FAILED，新增
+  Local OCR engine picker (rendered + mounted in Import dialog and Settings):
+    OK (all 5 markers; both mount points present)
+      檢查：元件渲染出「Local OCR cross-check」＋三個引擎選項＋預設位址，
+            且同時掛載於 ImageImportDialog 與 GlobalSettingsPanel 的 other 分頁
+ESLint 0 error ｜ LocalOcrSettings.jsx、GlobalSettingsPanel.jsx、ImageImportDialog.jsx 轉譯 HTTP 200
+```
+
+**RTM（批次 25c）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-2510 | 引擎切換必須在**設定面板**（Settings → Other）可直接操作 | `GlobalSettingsPanel.jsx` / `LocalOcrSettings.jsx` | Planner wants to choose the local OCR engine | Verified |
+| FR-2511 | 匯入對話框內亦可切換，且兩處共用同一份設定 | `ImageImportDialog.jsx` / localStorage | Planner wants to choose the local OCR engine | Verified |
+| AC-2506 | 選單在兩個位置都實際渲染並掛載（SSR 標記 + 原始碼掛載檢查） | smoke-test batch 25c guard | Planner wants to choose the local OCR engine | Verified |
+
+---
+
+## 🚀 批次 25d（2026-09-21）— 切換引擎後**自動嘗試啓動**該服務
+
+### 使用者需求
+> 「請在我切換后自動嘗試啓動」
+
+瀏覽器無法直接開本地程序 → 讓**已在運行的 PP-OCR 服務（`:8199`）兼任啓動器**。
+
+### 實作
+| 檔案 | 內容 |
+|------|------|
+| `C:\dev\paddle-ocr\ocr_server.py` | 新增**受控啓動器**：`GET /launch/services`（列出各引擎、是否在跑、是否可啓動）、`POST /launch/start {id}`、`POST /launch/stop {id}`。**只接受預先註冊的指令**（`pstocr` → 可攜版 `python\python.exe server.py`；`ollama` → `ollama.exe serve`），路徑可用 `PST_OCR_DIR` / `OLLAMA_DIR` 覆寫；記住 PID 以支援停止。另加「**同一 port 已有實例就拒絕再啓動**」保護（先前兩個實例搶 `:8199` 造成隨機 404） |
+| `src/lib/localOcr.js` | `probeLauncher()`、`startLocalService()`、`stopLocalService()`、**`ensureEngineRunning()`**（探測 → 不可達就請啓動器啓動 → **輪詢直到就緒**，含逾時與進度回報） |
+| `src/components/gantt/LocalOcrSettings.jsx` | **切換引擎／位址／模型即自動嘗試啓動**；首次掛載**只探測不啓動**（避免開啟面板就亂開服務）；狀態列顯示 `starting …`／`waiting … Ns`／`service started ✓`；不可達但可自動啓動時提供 **`Start now`** 按鈕；若連啓動器都沒開，明確提示先執行 `run-ocr-server.bat` |
+
+### 端到端實測（在你的機器上實際跑過）
+```
+POST http://127.0.0.1:8199/launch/start {"id":"pstocr"}
+  → {"ok":true,"started":true,"id":"pstocr","pid":41948,"url":"http://127.0.0.1:7861"}
+12–24 秒後 GET http://127.0.0.1:7861/health
+  → {"status":"ok","service":"pst-ocr","engine":"transformers","model":"…\\models\\OvisOCR2" …}
+（面板上由 `not reachable` 變成 ready ✓）
+
+目前三引擎：ppocr :8199 ✓（單一實例）／pstocr :7861 ✓（由啓動器帶起）／ollama :11434 ✓
+```
+
+### 驗收證據
+```
+煙霧測試：74 項 OK / 0 FAILED，新增
+  localOcr launcher (probe / start / ensure + UI auto-start wiring):
+    OK (dead launcher stays silent and spawns nothing; auto-start wired on engine switch + Start now button)
+      ← 測試全部打向死埠（127.0.0.1:9），確保「探測失敗時絕不會亂開程序」
+ESLint 0 error ｜ localOcr.js、LocalOcrSettings.jsx 轉譯 HTTP 200
+`/launch/services` 回應：pstocr canStart:true/running:true、ollama canStart:true/running:true
+```
+
+### 界線（誠實揭露）
+1. **前提**：啓動器本身（PP-OCR 服務）必須在跑 —— 執行一次 `C:\dev\paddle-ocr\run-ocr-server.bat` 即可；它沒開時 App 會顯示該指令，不會假裝能啓動。
+2. **只允許預先註冊的引擎**被啓動（`pstocr`／`ollama`），不接受任意命令（安全）。
+3. PST-OCR **`/health` 先就緒、模型後載入**：第一次真正讀頁仍需 1–3 分鐘。
+4. `stopLocalService()` 已實作但 UI 尚未放「停止」按鈕（需要時再加）。
+
+**RTM（批次 25d）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-2512 | 切換引擎後若不可達，系統自動嘗試啓動該服務並等待就緒 | `ensureEngineRunning()` / `LocalOcrSettings.jsx` | Planner wants engines started automatically | Verified |
+| FR-2513 | 提供受控啓動端點（列出／啓動／停止），只接受預先註冊指令 | `ocr_server.py` `/launch/*` | Planner wants engines started automatically | Verified |
+| FR-2514 | 首次掛載只探測不啓動；另備 `Start now` 手動按鈕 | `LocalOcrSettings.jsx` | Planner wants engines started automatically | Verified |
+| NFR-2505 | 探測失敗或啓動器不在時**不得**亂開程序，且須告知手動指令 | 死埠測試 + `hint` 文案 | Planner wants engines started automatically | Verified |
+| NFR-2506 | 同一 port 不得有兩個服務實例（避免路由不一致） | `ocr_server.py` 啓動時自檢 | Planner wants engines started automatically | Verified |
+| AC-2507 | 端到端：`POST /launch/start {pstocr}` → 12–24 秒後 `:7861/health` 200 | 實機實測（2026-09-21） | Planner wants engines started automatically | Verified |
+
+---
+
+## 🖨 批次 26（2026-09-21）— Print Preview 內自選「要列印哪些內容」
+
+### 使用者需求
+> 「在 Print Preview 中顯示讓我可以決定需要列印出哪些其他資料，比如 Other Settings 中的 Display」
+
+### 稽核發現
+- **Print Preview 只有唯讀檢視器**（工具列：頁數／新分頁／下載／關閉），沒有任何列印內容選項。
+- `buildGanttPDF` 雖然早就有 `showStaircase` 參數，但**收了卻完全沒畫**（dead parameter）；`Other Settings ▸ Display` 的其他項目（假日標記、關係線…）在 PDF 裡也都不存在。
+
+### 實作
+| 檔案 | 內容 |
+|------|------|
+| `src/lib/exportGanttPDF.js` | 新增 5 個列印內容選項並**真的畫出來**：`showHolidays`（HK 公眾假期淡紅底＋紅線，畫在長條**下方**，用 `getHolidaysInRange()`）、`showToday`（今天的紅色垂直線）、`showStaircase`（每個 programme 一組階梯線，用繪圖時記錄的 `barPositions[]`）、`showRelationshipLines`（FS/SS/FF/SF 折線＋箭頭，依 `links[]`／`link` 資料）、`showComparisonBars`（原本的紫色 BL/Late 比較條改為可關閉）。**全部預設維持原輸出**（新的四個預設 false、比較條預設 true）|
+| `src/components/gantt/PdfPreviewDialog.jsx` | 左側新增 **Print content** 面板（可用工具列按鈕收起）：5 個勾選項（含說明文字）＋跨頁說明＋重建中提示；**勾選即重建 PDF、預覽同步刷新**，下載永遠等於畫面上那一份。未傳入選項時（其他呼叫端）維持純檢視器 |
+| `src/components/gantt/ExportDialog.jsx` | 新增 `printOptions` 狀態（含從 `localStorage` 記憶的 `printOptions`）、`handlePrintOptionChange()`：重建 PDF、替換 blob URL、並保留新的 jsPDF 實例供下載；`buildPdfOptions()` 帶入 5 個選項；`embedData` 以 ref 快取避免每次勾選都重新編碼 metadata |
+
+### 驗收證據
+```
+煙霧測試：75 項 OK / 0 FAILED，新增
+  PDF print content (holidays / today / staircase / links / comparison):
+    OK (defaults byte-identical, all 5 options change the output, preview panel shows 7 markers)
+      ← 同時驗證「不勾任何新選項時輸出與舊版完全相同」（NFR-2601）
+      ← 並驗證五個選項各自都真的改變 PDF 輸出（不是死參數）
+ESLint 0 error ｜ exportGanttPDF.js、ExportDialog.jsx、PdfPreviewDialog.jsx 轉譯 HTTP 200
+```
+
+### 使用方式
+1. Export ▸ **PDF** ▸ **Preview PDF**
+2. 預覽左側 **Print content** 面板勾選：Holiday markers／Today line／Staircase line／Relationship lines／Comparison bars
+3. 每勾一次，右側預覽即時重建；滿意後按 **Download PDF**（下載的就是畫面上那一份，仍內嵌完整資料可瞬間還原）
+4. 選擇會被記住（與 PDF 頁面設定一起存於 localStorage）
+
+### 已知限制（誠實揭露）
+1. **關係線與階梯線只畫在同一頁內**：跨越分頁的連結會被略過（PDF 分頁是各自列印的區塊），面板上已註明。
+2. `Other Settings ▸ Display` 的 **Compare Bars／Diff Only／Relation Filter** 屬「畫面檢視狀態」而非列印內容：Diff Only／Relation Filter 會改變要匯出的列本身（應在匯出前先過濾），因此未放進列印面板；Compare Bars 在 PDF 對應的是 `Comparison bars` 開關 ✓。
+3. 假日採 `hkWorkingDays` 的**現行假期集**（含靜態後備清單），未涵蓋的年份會少畫。
+
+**RTM（批次 26）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-2601 | Print Preview 內可自選列印內容（假日／今天線／階梯／關係線／比較條） | `PdfPreviewDialog.jsx` | Planner wants to choose what gets printed | Verified |
+| FR-2602 | 勾選後即時重建預覽，且下載檔＝預覽檔 | `ExportDialog.handlePrintOptionChange` | Planner wants to choose what gets printed | Verified |
+| FR-2603 | `buildGanttPDF` 必須真的實作這些選項（不得再是死參數） | `exportGanttPDF.js` | Planner wants to choose what gets printed | Verified |
+| FR-2604 | 選擇需被記憶 | `localStorage` `printOptions` | Planner wants to choose what gets printed | Verified |
+| NFR-2601 | 不勾任何新選項時，輸出必須與舊版**位元組相同** | smoke-test batch 26 guard | Planner wants to choose what gets printed | Verified |
+| NFR-2602 | 未傳入選項的呼叫端維持純檢視器行為 | smoke-test batch 26 guard | Planner wants to choose what gets printed | Verified |
+| AC-2601 | 5 個選項各自都改變 PDF 輸出（以 data-URI 長度比對） | smoke-test batch 26 guard | Planner wants to choose what gets printed | Verified |
+| AC-2602 | 面板渲染 7 個標記（含 5 個選項與跨頁說明） | smoke-test batch 26 guard | Planner wants to choose what gets printed | Verified |
+
+---
+
+## 📐 批次 26b（2026-09-21）— 階梯線改為與畫面完全一致（並以**像素量測**驗證）
+
+### 使用者回報
+> 「爲什麽 Staircase Line不是按照原本頁面内的紅綫展示模式？」
+
+### 根因（我第一版確實畫錯了）
+畫面實作（`UnifiedGanttLayout` 的 `<polyline>`）是三條規則的組合：
+```js
+const fbt = fb.idx*ROW_H + (ROW_H - BH)/2;              // ① 貼齊長條「上緣」
+… if (bx2 < mx) continue; …                             // ② 只往前推進（被線擋住的長條跳過）
+if (pts.length) pts.push(`${mx},${ly + ROW_H/2}`);      // ③ 結尾下垂半列；strokeWidth = 2（在 27px 列高上）
+```
+我的 PDF 版有三處偏離：**① 畫在列中央**（`row.y + effectiveRowH/2`）、**② 少了結尾下垂段**、**③ 線寬固定 0.5mm 未按列高換算**。
+
+### 修正
+- y 改用 **長條上緣**（直接使用繪圖時已記錄的 `barPositions[idx].top`，與長條本身完全同一來源）
+- 沿用「只往前推進」的判斷：`if (step.right < reach) continue;`
+- 補上**結尾下垂** `effectiveRowH / 2`
+- 線寬改為 **`effectiveRowH × 2/27`**（畫面 2px／27px 的等比換算）
+- 顏色同畫面 `#dc3545`；section 列只當「新 programme 的起點」，本身不畫線（與畫面一致）
+
+### 驗證方式：不是讀程式碼，而是**量渲染出來的圖**
+產生 PDF → `pypdfium2` 以 288 dpi 渲染 → 量紅色像素與各長條的相對位置：
+```
+page 4763×3368 px (11.3 px/mm)      teal px 45130   red px 7356
+  bar 2: y=547..588 h=42px   red median y=544  → 上緣 -0.26mm ／ 列中央 -2.07mm  → HUGS TOP ✓
+  bar 3: y=615..656 h=42px   red median y=602  → 上緣 -1.15mm ／ 列中央 -2.95mm  → HUGS TOP ✓
+  bar 4: y=683..724 h=42px   red median y=685  → 上緣 +0.22mm ／ 列中央 -1.59mm  → HUGS TOP ✓
+RESULT: staircase hugs the bar tops (matches the on-screen line)
+```
+（bar 3 的 −1.15mm 是因為量測窗包含了上一條長條的垂直降落段，屬預期行為；section 列那條 bar 完全沒有紅線經過 ✓ 與畫面一致。）
+
+- 煙霧測試 **75 項 OK / 0 FAILED**；ESLint 0 error（`exportGanttPDF.js`）
+
+**RTM（批次 26b）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-2605 | PDF 階梯線必須與畫面同一呈現規則（貼長條上緣、只前進、結尾下垂、等比線寬） | `exportGanttPDF.js` | Planner wants the print to match the screen | Verified |
+| AC-2603 | 以實際渲染量測：紅線須落於各長條上緣而非列中央（288 dpi 像素量測） | 渲染量測（2026-09-21） | Planner wants the print to match the screen | Verified |
+| AC-2604 | section 列不得被階梯線經過（畫面亦同） | 渲染量測 | Planner wants the print to match the screen | Verified |
+
+---
+
+## 🩹 批次 26c（2026-09-21）— 「Print Preview 的 Staircase line 看起來是灰色」的診斷與修正
+
+### 使用者回報
+> 「在Print Preview中顯示的Staircase line是灰色的」
+
+### 診斷：先量檔案，不憑猜測
+用**同一份程式碼**產生 PDF，再以 72／96／150／300 dpi 渲染並量測線條顏色：
+```
+  72 dpi: line pixels=   929  strongest sample=#db3645（目標 #dc3545，色距 2）  strong-red=369
+  96 dpi: line pixels=  1375  strongest sample=#db3645                        strong-red=694
+ 150 dpi: line pixels=  3271  strongest sample=#db3645                        strong-red=1885
+ 300 dpi: line pixels= 11888  strongest sample=#db3645                        strong-red=7728
+```
+→ **檔案內容確實是 #dc3545 紅，不是灰色**。會「看起來灰」的兩個原因：
+1. **線太細**：當時線寬 = `列高 × 2/27` ≈ **0.41 mm**；PDF 檢視器以 fit-width 顯示時約 1 px，反鋸齒把紅色洗成灰粉。
+2. **可能是舊預覽**：舊版預覽沒有任何建置時間／大小標示，無法分辨新舊。
+
+### 修正
+| # | 改動 |
+|---|------|
+| 1 | **階梯線加粗並設下限**：`clamp(列高 × 2/27, 0.6, 1.2) mm`（保留畫面比例關係，但在預覽縮放下仍讀得出紅色） |
+| 2 | **關係線箭頭同步加粗** 0.3 → 0.45 mm（同樣的細線問題） |
+| 3 | **預覽工具列顯示 `built HH:MM:SS · NN KB`** → 一眼分辨是否為最新建置的檔案 |
+
+### 驗證（同一量測腳本重跑，檔案層級）
+```
+  72 dpi: strong-red pixels   369 → 716（+94%）
+  96 dpi: strong-red pixels   694 → 987（+42%）
+ 150 dpi: strong-red pixels  1885 → 2520
+ 300 dpi: strong-red pixels  7728 → 10534
+最強樣本仍為 #db3645（＝畫面用的 #dc3545，色距 2）→ 顏色未變、只有粗細改變
+```
+- 煙霧測試 **75 項 OK / 0 FAIL**；ESLint 0 error；`exportGanttPDF.js`／`PdfPreviewDialog.jsx`／`ExportDialog.jsx` 轉譯 HTTP 200
+
+### 若仍然偏灰（下一步）
+可能與 **PDF 檢視器的顯示模式**有關（例如 Chrome 的深色模式會把 PDF 反轉／壓暗），或那份 PDF 不是最新建置。請把匯出的 PDF 放進 `Downloads` 並告知檔名，我可以**直接量測你的檔案**：若你的檔案同樣是紅色，即為檢視器端效果，與檔案內容無關。
+
+**RTM（批次 26c）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-2606 | 階梯線在預覽縮放下必須可辨識為紅色（線寬下限 0.6 mm） | `exportGanttPDF.js` | Planner wants the print to match the screen | Verified |
+| FR-2607 | 關係線箭頭同樣需在預覽縮放下可見（0.45 mm） | `exportGanttPDF.js` | Planner wants the print to match the screen | Verified |
+| FR-2608 | 預覽工具列顯示建置時間與檔案大小（可辨識新舊） | `PdfPreviewDialog.jsx` / `ExportDialog.jsx` | Planner wants the print to match the screen | Verified |
+| AC-2605 | 檔案層級量測：紅線最強樣本 #db3645、72/96 dpi 實心紅像素顯著增加 | 渲染量測（2026-09-21） | Planner wants the print to match the screen | Verified |
+
+---
+
+## 🔧 批次 27（2026-09-21）— Last Recalc Date：可設定、可在 Display 顯示、可在日期欄右鍵編輯
+
+### 使用者需求（原話）
+> 「讓我可以設置一個 Last Recalc Date，作爲當下 Programme 的當下日期，也需要在 Display 中點選顯示，但編輯 Last Recalc Date 請直接讓我在日期欄右鍵中顯示修改」
+
+### 對照現況（為何要再做一次）
+| 面向 | 批次 21 的現況 | 缺口 |
+|------|----------------|------|
+| 設定 | Quick Filter 選單有 `Last Recalc Date` 日期欄，狀態膠囊依它判讀 | 藏在漏斗選單裡、畫面上完全看不到 |
+| 顯示 | 無 | 沒有任何 data date 標示 |
+| 編輯 | 只能在漏斗選單改 | 日期欄右鍵沒有入口 |
+| 保存 | 只存在記憶體 | 存檔/載入不帶資料日期，重開就回 XER 舊值 |
+
+### 實作
+| # | 功能 | 位置 |
+|---|------|------|
+| 1 | 圖表繪製 **data date 線**：橘色 `#e88219`、2px、虛線（7,3）＋頂端三角與標籤 `Last Recalc 2026-09-21`（白底描邊，壓在 bar 上仍可讀）。刻意與番茄紅 today 線區隔，避免混淆 | `UnifiedGanttLayout.jsx` |
+| 2 | Display 新增開關 **「Last Recalc Date line」**（Other ▸ Display；預設開，但**沒有日期就不畫線**） | `GanttPage.jsx` |
+| 3 | **日期欄右鍵** → 選單最上方新增「Last Recalc Date」區塊：日期輸入框 + `Use this cell — <欄名> (<日期>)`（右鍵哪一格就用那格）/ `Use Start` / `Use Finish` / `Use Today` / `Use file date` / `Clear Last Recalc Date` | `RowContextMenu.jsx`；日期儲存格（Start/End/BL/Early/Late…）接上 `openCellMenu` | 
+| 4 | 資料日期隨 programme 走：存檔與上傳寫入 payload `meta.last_recalc_date`，載入時還原（XER 值為後備） | `ProjectBar.jsx` / `GanttPage.jsx` |
+| 5 | 匯出一致性：XER/XML 的 export date 預設 = 設定的資料日期（原本只讀 XER） | `ExportDialog.jsx` |
+| 6 | Print Preview 第 6 個選項 **「Last Recalc Date line」**（預設關 → 既有輸出位元組不變） | `exportGanttPDF.js` / `PdfPreviewDialog.jsx` |
+
+### 驗收（自動化）
+- 煙霧測試新增「Last Recalc Date（右鍵日期欄 · Display 開關 · 隨 programme 儲存 · PDF 選項）」→ **76 項 OK / 0 FAIL**（新增後仍全綠）
+- Print content 測試擴充：6 個選項都會改變輸出，且 `showRecalcDate` 沒給日期時輸出與預設**完全一致**
+- ESLint 0 error；7 個受影響模組 Vite 轉譯 HTTP 200
+
+### 驗收（PDF 真實位元組量測，150/300 dpi 算圖）
+```
+資料日期 = 今天  ：橘線 x=1672，today 紅線 x=1671 → 同日落在同一格（差 1 px）
+由 30 天跨度推得  ：10.933 px/day
+資料日期 = 今天−3：橘線 x=1638，期望 1639.2     → 差 1.2 px（同一格）
+線條顏色          ：#e8821a（畫面用 #e88219，色距 1）
+虛線              ：同一欄內 8 段空隙（dashed ✓），欄內著色像素 83
+選項關閉（預設）  ：該處無橘線；14810 bytes → 開啟後 15225 bytes（預設輸出未變）
+```
+
+### 已知限制
+- 資料日期是 **Programme 層級**（P6 定義），所以每一列看到／設定的都是同一個日期。
+- 線只涵蓋資料列範圍（與 today 線一致）；跨頁時每一頁各畫一次。
+- 「Use this cell」只在右鍵那一格真的有日期時出現。
+
+**RTM（批次 27）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-2701 | 可設定 Programme 的 Last Recalc Date（作為當下日期） | Last Recalc Date 編輯器（RowContextMenu） | Planner wants to set the programme's current date | Verified |
+| FR-2702 | 日期欄右鍵即可修改（含「用這一格日期」捷徑） | 日期儲存格 `openCellMenu` + RowContextMenu | Planner wants to edit it straight from the date column | Verified |
+| FR-2703 | Display 可勾選顯示 data date 線（橘色虛線 + 標籤） | Other Settings ▸ Display `showRecalcLine` | Planner wants to see the data date on the chart | Verified |
+| FR-2704 | 資料日期隨 programme 儲存／載入 | ProjectBar payload `meta.last_recalc_date` | Planner wants the date to stay with the programme | Verified |
+| FR-2705 | 匯出沿用：XER/XML export date 預設 = 資料日期 | ExportDialog exportDate | Planner wants the exported record to carry the data date | Verified |
+| FR-2706 | Print Preview 可將 data date 線印出（預設關） | exportGanttPDF `showRecalcDate` / PdfPreviewDialog | Planner wants the print to match the screen | Verified |
+| AC-2701 | PDF 實測：資料日期 = 今天時與 today 線同格（差 1px）；今天−3 差 1.2px；色距 1 | 渲染量測（2026-09-21） | Planner wants the data date on the chart | Verified |
+| AC-2702 | 預設輸出未變（選項關閉時該處無線，檔案大小不變） | 煙霧測試 print content | Planner wants no surprise changes | Verified |
+
+---
+
+## 🔧 批次 28（2026-09-21）— Gantt Bar Info：Show Names / Start / Finish on Bars
+
+### 使用者需求（附 xerviewer.org 參考 markup）
+> 「在 Gantt Bar Settings 中參考 https://www.xerviewer.org/ 中的內容增加 Gantt Bar Info：Show Names on Bars / Show Start Date on Bars / Show Finish Date on Bars」
+
+### 實作
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | 三個獨立開關，**id 與參考 markup 完全一致**（`ganttbar-shownames` / `ganttbar-showstartdate` / `ganttbar-showfinishdate`），帶 `role="switch"` + `aria-checked`，20×12 圓形滑鈕（xerviewer 的緊湊樣式；配色改用本專案 CLF 的 primary / surface） | `GanttSettingsPanel.jsx`（Gantt Bars ▸ Bars 分頁 ▸ Bar Info） |
+| 2 | 新設定 `bar.info = { showName, showStart, showFinish }`，**預設全關**（畫面與匯出都不變） | `displaySettings.js` |
+| 3 | 共用文字組合器 `buildBarText(task, bar, dateFormat)`：Labels 分頁欄位優先，再疊加已開啟的 Bar Info（名稱／開始／完成），**自動去重**並以 ` · ` 連接；日期跟隨 Display 的日期格式 | `displaySettings.js` |
+| 4 | 畫面 bar 標籤改用同一組合器（Labels 關閉時仍可只靠 Bar Info 顯示文字） | `UnifiedGanttLayout.jsx` |
+| 5 | PDF 同步（WYSIWYG）：`hasBarInfo()` 為真才畫字（預設輸出位元組不變）；放得下畫在 bar 內（白字），放不下自動畫到 bar 右側 | `exportGanttPDF.js` |
+
+### 疊加規則（實測輸出）
+```
+Labels(Item) + 三個全開   → "A1 · Excavate · 2026-09-01 · 2026-11-30"
+Labels 關閉  + 三個全開   → "Excavate · 2026-09-01 · 2026-11-30"
+Labels(Activity) + Show Names → "Excavate"           （同名不會印兩次）
+日期格式改 dd/MM/yyyy     → "25/09/2024 · 04/10/2024"
+三個全關（預設）          → "A1"                     （＝本批次之前的外觀）
+```
+放不進 bar 時（短 bar、或 bar 被比較條切成半高）→ 文字自動畫到 bar 右側，**不會消失**（畫面與 PDF 同一規則）。
+
+### 驗收（自動化）
+- 煙霧測試新增「Gantt Bar Info (Show Names / Start / Finish on Bars · screen + PDF)」→ **77 項 OK / 0 FAIL**
+  - 文字規則 6 組斷言、三個 switch 的 id/label/`role="switch"`、面板 SSR 標記、**畫面 chart SSR 實際渲染字串**、PDF 位元組（預設不變 / 開啟後改變）
+- ESLint 0 error；`displaySettings.js`、`GanttSettingsPanel.jsx`、`UnifiedGanttLayout.jsx`、`exportGanttPDF.js` Vite 轉譯 HTTP 200
+
+### 驗收（PDF 真實位元組 + 300 dpi 算圖目視）
+```
+Bar Info 全開 ：「A1 · Excavate · 2026-09-01 · 2026-09-30」畫在 bar 內（白字）
+               「A2 · Piling … · 2026-10-01 · 2026-11-06」畫在 bar 內
+               短 bar → 自動畫到右側：「A3 · Slab · 2026-10-20 · 2026-11-03」
+只開 Show Names（Labels 關）→ bar 上只有「Excavate」／「Piling」／「Slab」
+檔案大小：預設 14247 bytes → 全開 14610 bytes（預設輸出未變）
+```
+
+### 已知限制
+- PDF 全篇使用 jsPDF 內建 `helvetica`，且 `sanitizePDFText()` 會把非 Latin-1 字元轉成 `?` → **中文活動名稱在 PDF 顯示為 `????`**（左側 Activity 欄位本來就是這樣，非本批次造成）。要修正需嵌入 CJK 字型，屬另一個批次。
+- Bar Info 文字放不進 bar 時改畫右側；若右側也超出紙邊，目前不做自動截斷（與既有 bar 標籤行為一致）。
+
+**RTM（批次 28）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-2801 | Gantt Bar Settings 提供三個 Bar Info 開關（名稱／開始／完成日期） | GanttSettingsPanel ▸ Bars ▸ Bar Info | Planner wants names and dates written on the bars | Verified |
+| FR-2802 | Bar Info 與 Labels 分頁欄位可疊加且不重複，日期跟隨 Display 格式 | `buildBarText()`（displaySettings） | Planner wants one consistent bar caption | Verified |
+| FR-2803 | 畫面 bar 與 PDF 使用同一組合器（WYSIWYG） | UnifiedGanttLayout / exportGanttPDF | Planner wants the print to match the screen | Verified |
+| FR-2804 | 預設全關，未開啟時畫面與 PDF 輸出皆不變 | `bar.info` 預設 + `hasBarInfo()` | Planner wants no surprise changes | Verified |
+| AC-2801 | 煙霧測試：6 組文字規則 + 3 個 switch id + 畫面 SSR + PDF 位元組，全數通過（77 OK / 0 FAIL） | scripts/smoke-test.mjs | Planner wants names and dates written on the bars | Verified |
+| AC-2802 | PDF 目視：bar 內白字、短 bar 自動右移、預設檔大小不變 | 渲染量測（2026-09-21） | Planner wants the print to match the screen | Verified |
+
+---
+
+## 🔧 批次 29（2026-09-21）— Bar 文字的位置、字體家族、大小與顏色
+
+### 使用者需求
+> 「幫我再加上可以調整相關内容處於的位置（Bar chart 的前方或者後方）以及字體大小顔色等」
+> （並附上 xerviewer 的 a11y 清單：Font Family 下拉、Text Color on Bars 色票、Text Size on Bars 6–16 預設 10）
+
+### 實作
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | **位置**三選一：`Inside the bar`（條內）／`Before the bar (left)`（bar 前方）／`After the bar (right)`（bar 後方）。舊值 `right` 自動視為 `after`（`normalizeBarTextPosition()`），既有設定不會失效 | `displaySettings.js` + 面板 + 畫面 + PDF |
+| 2 | **字體家族**（`label.fontFamily`，預設 System Default）：共用 `WBS_FONT_FAMILIES` 清單，補上使用者清單中的 **Comic Sans MS / Fira Sans / Monaco**（共 17 種） | 同上 |
+| 3 | **文字大小** 6–16 px（`label.fontSize`，預設 10，與參考 UI 的 valuemin=6 / valuemax=16 一致）+ 一鍵 Reset | 同上 |
+| 4 | **兩個顏色**：`label.color`（畫在 bar 上，預設白）與 `label.colorOutside`（畫在 bar 前／後，預設 `#333333`） | 同上 |
+| 5 | 設定集中處：**Gantt Bars ▸ Bars ▸ Bar Info ▸ Text style**（Labels 分頁只留「內容」與最小 bar 寬度，並提示樣式改到 Bars 分頁） | `GanttSettingsPanel.jsx` |
+| 6 | 「before」文字靠 bar 左緣**右對齊**（畫面 `translate(-100%, -50%)` + text-align:right；PDF `doc.text(..., { align:"right" })`），「after」貼 bar 右緣；`inside` 放不下時自動改到 after（文字不會消失） | `UnifiedGanttLayout.jsx` / `exportGanttPDF.js` |
+| 7 | PDF 字型對應：jsPDF 只有四種內建字型 → mono→`courier`、serif→`times`、其餘→`helvetica`（`pdfCoreFontFor()`，面板有提示） | `exportGanttPDF.js` |
+
+### 驗收（自動化）
+- 煙霧測試新增「Bar text style (position · font family · size · colours)」→ **78 項 OK / 0 FAIL**
+  - 位置正規化 6 組、PDF 字型對應 7 組、面板 11 個標記、畫面 SSR（`translate(-100%, -50%)` / `text-align:right` / `font-size:15px` / 自訂顏色 hex）
+  - PDF **dataURI 內容比對**：before ≠ inside ≠ after、Georgia ≠ Courier ≠ 預設、大小/顏色改變 → 都確實改變輸出
+- ESLint 0 error；4 個模組 Vite 轉譯 HTTP 200
+
+### 驗收（PDF 真實位元組 + 200 dpi 算圖目視）
+```
+position = before ：文字緊貼 bar 左緣右對齊，例如 "A1 · Excavate · 2026-09-15 · 2026-10-15"
+position = inside ：白字畫在 bar 內（原行為）
+position = after  ：文字緊接 bar 右緣
+15px + Georgia + #b15315 → PDF 以 Times 系列字型 + 棕紅色 + 放大字級呈現
+Courier New             → PDF 以 Courier 呈現
+檔案大小：before 12399 / inside 12397 / after 12399 / styled 12461 / mono 12431 bytes
+```
+
+### 已知限制
+- PDF 內建字型只有 4 種，所以 17 種家族會**歸類**成 Courier／Times／Helvetica（畫面仍用真正的字體家族）。
+- 文字過長時 PDF 不做裁切（bar 前／後的文字可能與相鄰列的 bar 重疊，屬規劃師自行判斷）。
+- 中文活動名稱在 PDF 仍為 `????`（既有全域限制，需嵌入 CJK 字型，見批次 28）。
+
+**RTM（批次 29）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-2901 | Bar 文字位置可選條內／bar 前方／bar 後方，舊值 `right` 相容 | `normalizeBarTextPosition()` + BAR_TEXT_POSITIONS | Planner wants the caption placed where it fits | Verified |
+| FR-2902 | 字體家族可選（17 種含 Comic Sans MS / Fira Sans / Monaco） | `bar.label.fontFamily` + WBS_FONT_FAMILIES | Planner wants to control the bar text font | Verified |
+| FR-2903 | 文字大小 6–16 px 可調（預設 10） | `bar.label.fontSize` | Planner wants to control the bar text size | Verified |
+| FR-2904 | 條內與條外文字顏色各自可調 | `bar.label.color` / `colorOutside` | Planner wants to control the bar text colour | Verified |
+| FR-2905 | PDF 依位置對齊並將字型家族映射到最接近的內建字型 | `pdfCoreFontFor()` + exportGanttPDF | Planner wants the print to match the screen | Verified |
+| AC-2901 | 煙霧測試 78 OK / 0 FAIL：位置、字型對應、面板、畫面 SSR、PDF dataURI 內容比對 | scripts/smoke-test.mjs | Planner wants to control the bar text | Verified |
+| AC-2902 | PDF 目視：before 右對齊貼左緣、inside 白字、after 貼右緣、Georgia→Times、Courier→Courier | 渲染量測（2026-09-21） | Planner wants the print to match the screen | Verified |
+
+---
+
+## 🔧 批次 30（2026-09-21）— 完整顯示所有資料（不再以「…」省略）
+
+### 使用者需求
+> 「幫我調整完整顯示出所有資料，而不是以……省略」
+
+### 診斷：先找出所有「會把資料藏起來」的地方
+| 位置 | 原本行為 |
+|------|----------|
+| 甘特圖 bar 上的文字 | `overflow:hidden; text-overflow:ellipsis` → 文字比 bar 長就變成「A1 · Excava…」 |
+| 甘特圖程式（WBS）名稱 | `text-overflow:ellipsis` → 長程式名稱被截斷 |
+| 活動清單欄位（Resource / Duration Type / Status / Calendar / P6 ID / GUID…） | Tailwind `truncate` → 一律「…」 |
+| PDF 表格每個欄位 | `fitTextInCell()`：最多只縮 20% 字級，然後**砍掉字尾接 `...`** |
+| 資訊面板的資源代碼／名稱、面板標題 | `truncate` |
+
+### 實作
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | 新增**文字量測**工具：`measureTextWidth()`（瀏覽器用 canvas `measureText` 取得真實字寬；無 canvas 環境如 SSR/測試自動改用逐字估算，CJK 以 1 em 計）＋ `textFits()` ＋ `fitFontSizeToWidth()`（縮字級直到放得下，有下限）＋ 快取（600 列圖表每回合量測上千字串） | `displaySettings.js` |
+| 2 | **bar 文字改用「實測寬度」判斷**是否放得進 bar（原本只比對固定的 Minimum bar width）：放得下→畫在 bar 內（並移除 ellipsis）；放不下→**整串畫到 bar 外**（依 Position 決定條前／條後）。完全不裁切、不省略 | `UnifiedGanttLayout.jsx` |
+| 3 | 程式（WBS）名稱：移除 ellipsis，**完整顯示**（必要時延伸到時間軸上，與 P6 的 programme bar 標示一致） | `UnifiedGanttLayout.jsx` |
+| 4 | 活動清單欄位：以 `fitFontSizeToWidth()` **自動縮字級塞進欄寬**（下限 6.5 px）取代 `truncate`；`title` 提示保留 | `UnifiedGanttLayout.jsx` |
+| 5 | PDF `fitTextInCell()`：**永不截斷**，改為一路縮字級（下限 3.5 pt）直到整個值放得下 | `exportGanttPDF.js` |
+| 6 | 資訊面板：資源代碼／名稱與標題改為 `break-words`（換行完整顯示） | `GanttInfoPanel.jsx` |
+| 7 | 其他顯示資料名稱處：右鍵選單的活動名稱、快照名稱、專案名稱清單改為換行完整顯示（工具列上的專案名另加 `title` 提示） | `RowContextMenu.jsx` / `SnapshotManager.jsx` / `ProjectBar.jsx` |
+
+### 驗收（自動化）
+- 煙霧測試新增「Full values everywhere (no "…" truncation · chart + PDF text layer)」→ **79 項 OK / 0 FAIL**
+  - 量測工具：正數、長字串更寬、CJK 約 1 em、縮字級有下限、短字串不縮
+  - 畫面 SSR：長程式名稱與 65 字元活動名稱**完整出現**，且整份圖表 HTML **完全不含 `ellipsis` / `truncate`**
+  - **PDF 文字層**（pdfjs `getTextContent()`）直接驗證：完整活動名稱與程式名稱都在，且整份 PDF **不含 `...`**
+- ESLint 0 error；4 個模組 Vite 轉譯 HTTP 200
+
+### 驗收（PDF 目視，220 dpi）
+```
+表格：Activity 欄完整印出
+      "Excavate and cart away unsuitable material from the basement footprint"
+      "Piling works - bored piles, 1.2 m diameter, incl. pile caps and testing"
+      程式列 "PHASE ONE - Site preparation, drainage and piling works (Zone A to D)"
+bar ：太窄的 bar 其說明整串移到 bar 後方：
+      "A1 · Excavate and cart away unsuitable material from the basement footprint · 2026-09-01 · 2026-09-25"
+```
+
+### 行為改變（刻意，符合本次需求）
+- 短 bar 的標籤不再「隱藏」或「省略」，而是**移到 bar 外完整顯示**（含預設的 Item 代碼）。
+- 密集欄位改為縮字級顯示，字級最小到 6.5 px（畫面）／3.5 pt（PDF）。
+
+### 已知限制
+- 固定欄寬的極端長值（例如 36 字元 GUID 擠在 15 mm 欄位）：PDF 會縮到 3.5 pt 後仍可能略微溢出該欄；畫面則在 6.5 px 後由 `overflow:hidden` 裁切（不會顯示「…」，滑鼠移上去仍有完整 `title`）。要 100% 保證，需改成可變列高或讓欄位自動加寬（破壞與甘特圖的列對齊），故未採用。
+- 以下**選擇器／清單**的窄列仍保留 `truncate`（不屬甘特圖的資料列，且換行會破壞對話框版面）：合併對話框活動清單、比較對話框、XML 關聯編輯器、區域選擇器、欄位篩選下拉、Export 未配對清單、PDF 預覽的檔名。若也要一併改，請告知。
+- 中文活動名稱在 PDF 仍為 `????`（既有全域限制，需嵌入 CJK 字型，見批次 28）。
+
+**RTM（批次 30）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-3001 | 提供文字量測與縮字級工具（canvas + 估算後備） | `measureTextWidth()` / `textFits()` / `fitFontSizeToWidth()` | Planner wants every value shown in full | Verified |
+| FR-3002 | bar 文字以實測寬度判斷，放不下就整串移到 bar 外（不省略） | UnifiedGanttLayout bar caption | Planner wants every value shown in full | Verified |
+| FR-3003 | 程式名稱與活動清單欄位不再截斷（縮字級或完整顯示） | UnifiedGanttLayout | Planner wants every value shown in full | Verified |
+| FR-3004 | PDF 表格欄位永不截斷（縮字級取代 `...`） | `fitTextInCell()` | Planner wants the print to show every value | Verified |
+| FR-3005 | 資訊面板資源名稱／標題可換行完整顯示 | GanttInfoPanel | Planner wants every value shown in full | Verified |
+| AC-3001 | 煙霧測試 79 OK / 0 FAIL：畫面 HTML 無 `ellipsis`/`truncate`，PDF 文字層含完整值且無 `...` | scripts/smoke-test.mjs | Planner wants every value shown in full | Verified |
+| AC-3002 | PDF 目視：長活動名稱與長 bar 說明皆完整印出 | 渲染量測（2026-09-21） | Planner wants the print to show every value | Verified |
+
+---
+
+## 🔧 批次 31（2026-09-21）— Print content 面板加入「Bar text」開關
+
+### 使用者需求
+> 「該顯示點選請增加到 Print content 中」
+
+### 實作
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | Print Preview 的 **Print content** 面板新增第二個區塊 **「Bar text」**，內含三個與 Gantt Bars ▸ Bar Info **完全相同**的開關：**Names on bars／Start dates on bars／Finish dates on bars**（含說明文字） | `PdfPreviewDialog.jsx` |
+| 2 | 這三個開關是**共用設定**（寫回 `displaySettings.bar.info`）：在列印預覽勾選 → **甘特圖同步改變**、預覽立即重建，畫面與紙本永遠一致 | `ExportDialog.jsx`（`handleBarInfoChange` → `updateDisplay({ bar })`） |
+| 3 | 預覽重建時使用**新的** bar 設定（`buildPdfOptions({ bar: nextBar })`），因為 React state 尚未套用；舊的 blob URL 會撤銷避免記憶體洩漏 | `ExportDialog.jsx` |
+| 4 | 沒傳 `onBarInfoChange` 的呼叫者不會看到這個區塊（向後相容，原有測試不變） | `PdfPreviewDialog.jsx` |
+| 5 | 面板並提示「字體、大小、顏色、位置（條內／條前／條後）在 Gantt Bars ▸ Bar Info ▸ Text style」 | `PdfPreviewDialog.jsx` |
+
+### 關於 Display 面板的另外兩個開關（Diff Only / Relation Filter）
+**不需要加到 Print content**：匯出用的任務清單 `sortedComputedTasksForExport` 來自 `computedTasks = filtered`，而 `filtered` 已經包含 Diff Only 與 Relation Filter 的結果 → **PDF 印的就是篩選後的清單**（WYSIWYG）。因此它們在列印時本來就生效，加 checkbox 只會變成重複控制。
+
+### 驗收（自動化）
+- 煙霧測試新增「Print preview · bar text switches (shared with Gantt Bars ▸ Bar Info)」→ **80 項 OK / 0 FAIL**
+  - 面板含 5 個標記（Bar text / 三個開關 / Text style 提示）
+  - 勾選狀態跟著共用設定（勾 2 個 → 畫面多 2 個 `checked`）
+  - 沒傳 handler 時區塊不出現（向後相容）
+  - 原始碼驗證：`barInfo={barInfo}`、`onBarInfoChange={handleBarInfoChange}`、`updateDisplay({ bar: nextBar })`、`buildPdfOptions({ bar: nextBar })` 都在
+- ESLint 0 error；2 個模組 Vite 轉譯 HTTP 200
+
+### 已知限制
+- 「Bar text」只放**三個內容開關**（避免面板過長）；樣式（字體／大小／顏色／位置）仍在 Gantt Bars ▸ Bar Info ▸ Text style，兩邊是同一組設定。
+
+**RTM（批次 31）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-3101 | Print content 面板提供 Bar text 的三個開關（Names／Start／Finish on bars） | PdfPreviewDialog `BAR_TEXT_OPTIONS` | Planner wants the display choices in the print preview | Verified |
+| FR-3102 | 預覽上的開關與畫面共用同一設定（勾選後甘特圖同步改變） | ExportDialog `handleBarInfoChange` → `updateDisplay` | Planner wants one source of truth | Verified |
+| FR-3103 | 切換後以新設定立即重建預覽（並撤銷舊 blob URL） | ExportDialog `buildPdfOptions({ bar })` | Planner wants what-you-see-is-what-you-download | Verified |
+| FR-3104 | 未提供 handler 的呼叫者不受影響（區塊不顯示） | PdfPreviewDialog `canChooseBarText` | Planner wants no regressions | Verified |
+| AC-3101 | 煙霧測試 80 OK / 0 FAIL：標記、勾選狀態、向後相容、原始碼接線 | scripts/smoke-test.mjs | Planner wants the display choices in the print preview | Verified |
+
+---
+
+## 🔧 批次 32（2026-09-21）— Start／Finish 同時開啟時：開始日期放 bar 前端、完成日期放 bar 後端
+
+### 使用者需求
+> 「如果同時點選了 Show Start Date on Bars 與 Show Finish Date on Bars 請分別將兩個日期放置到 Bar chart 的前端與後端分開顯示」
+
+### 規則
+只有在 **Show Start Date on Bars 與 Show Finish Date on Bars 兩個都勾選**時才拆開；只勾其中一個（或都不勾）維持原本「合併成一行」的標籤，行為完全不變。
+
+```
+                 ┌──── 前端（條前）────┐  ┌──── bar ────┐  ┌──── 後端（條後）────┐
+兩個日期都勾選：  2026-08-20              [ A1 · Excavate ]  2026-10-20
+                                        （名稱或 Item 依 Position 設定）
+只勾開始：       [ A1 · Excavate · 2026-08-20 ]              ← 合併，原行為
+只勾完成：       [ A1 · Excavate · 2026-10-20 ]              ← 合併，原行為
+```
+
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | 新共用函式 `buildBarTextParts(task, bar, dateFormat)` → `{ front, main, back, split }`：`split` 為真時 front＝開始日期、back＝完成日期、main＝其餘說明（名稱／Item…）；Labels 分頁的欄位若本來就是 `start`／`finish`，main 會自動留空避免重複 | `displaySettings.js` |
+| 2 | 畫面：前端與後端各自是一個 **flex 列**（`gap: 6px`），前端整列右對齊貼在 bar 左緣（`translate(-100%, -50%)`）、後端貼 bar 右緣；main 依 Position 決定在條內或條前／條後，**任何長度都不會互相重疊** | `UnifiedGanttLayout.jsx` |
+| 3 | PDF：同樣三個插槽，以前端右對齊（`align:"right"`）往左堆、後端往右堆，並用 `getTextWidth()` 計算間距 → 畫面與紙本一致 | `exportGanttPDF.js` |
+| 4 | main 放不進 bar 時（條太窄或比較條切成半高）自動移到**後端**（完成日期之後），文字仍完整顯示 | 同上 |
+
+### 驗收（自動化）
+- 煙霧測試新增「Bar dates split (start in front · finish behind when both switches are on)」→ **81 項 OK / 0 FAIL**
+  - `buildBarTextParts`：兩日期 → front/back/main 正確且 `split=true`；只勾一個 → `split=false` 且維持合併文字；Labels 欄位為 `start` 時 main 不留重複
+  - 畫面 SSR：前端盒（`translate(-100%, -50%)` 僅 1 個）＋後端盒、日期各為獨立 span、名稱 span 不含日期、合併字串**不存在**；只勾一個時維持合併且無前端盒
+  - PDF：內容與「只勾開始」及「預設」都不同
+- 既有兩項測試（batch 28／30）依新規則更新預期 → 全數仍通過
+- ESLint 0 error；3 個模組 Vite 轉譯 HTTP 200
+
+### 驗收（PDF 目視，220 dpi）
+```
+兩日期都勾選
+  寬 bar ：2026-08-20   [ A1 · Excavate ]   2026-10-20      ← 前端 / 條內 / 後端
+  窄 bar ：2026-10-01   [ A2 · Piling ]     2026-10-10      ← 條太窄時 main 仍正確落位
+只勾 Show Start Date（對照組）
+  [ A1 · Excavate · 2026-08-20 ]                           ← 合併顯示，未改變
+```
+
+### 已知限制
+- 前端沒有空間（bar 太靠時間軸左緣）時，日期會延伸到表格與時間軸交界處；PDF 亦同（不裁切、不省略）。
+- 若 Position 設為 `before` 且同時開啟兩個日期：main 會排在**開始日期之前**（同一前端列，`gap` 分隔）。
+
+**RTM（批次 32）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-3201 | 同時勾選 Start／Finish 時，開始日期顯示在 bar 前端、完成日期在 bar 後端（分開顯示） | `buildBarTextParts()` + 畫面／PDF 插槽 | Planner wants the two dates at opposite ends of the bar | Verified |
+| FR-3202 | 只勾選一個日期時維持原本合併標籤（行為不變） | `buildBarTextParts()` split 條件 | Planner wants no change to the single-date case | Verified |
+| FR-3203 | 其餘說明（名稱／Item）依 Position 擺放，條內放不下時移到後端；各段不重疊（flex 列 + 間距） | UnifiedGanttLayout / exportGanttPDF | Planner wants readable captions | Verified |
+| FR-3204 | 日期重複時自動省略（Labels 欄位＝start／finish） | `buildBarTextParts()` | Planner wants no duplicated dates | Verified |
+| AC-3201 | 煙霧測試 81 OK / 0 FAIL（parts / 畫面 SSR / PDF 三層） | scripts/smoke-test.mjs | Planner wants the two dates at opposite ends of the bar | Verified |
+| AC-3202 | PDF 目視：前後端各一日期、條內名稱、單日期仍合併 | 渲染量測（2026-09-21） | Planner wants the two dates at opposite ends of the bar | Verified |
+
+---
+
+## 🩹 批次 33（2026-09-21）— 修正 Print Preview「Comparison bars」的 bug
+
+### 使用者回報
+> 「請修正 Print Preview 中 Comparison bars 出現的 bug」
+
+### 先重現，再修（實測結果）
+```
+printOptions.showComparisonBars = undefined → 勾選框 CHECKED   （預設開啟，正確）
+printOptions.showComparisonBars = true      → 勾選框 CHECKED   （正確）
+printOptions.showComparisonBars = false     → 勾選框 CHECKED   ✗ ← BUG：取消勾選後又自己跳回勾選
+PDF 完全沒有讀 section 的 showComparison    ✗ ← BUG：畫面 Display ▸ Compare Bars 關掉，列印仍畫紫色對比條
+```
+
+### 根因
+1. **勾選狀態判斷式寫錯**：`printOptions[key] !== false && printOptions[key] !== undefined ? !!printOptions[key] : key === "showComparisonBars"` —— 當值是 `false` 時第一個條件不成立，於是落到「沒設定 → 用預設值」的分支，而該分支的預設是 `true` → 永遠顯示勾選。**只有 `undefined`（從未設定）才應該回退到預設**。
+2. **PDF 只認 `showComparisonBars` 這個全域選項**，沒有讀每個 programme 的 `showComparison` 旗標（畫面的「Compare Bars」開關設定的就是這個旗標）→ 列印與畫面不一致。
+
+### 修正
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | 勾選狀態改為 `isChecked()`：`undefined` → 用預設（Comparison bars 預設 true、其餘 false）；`false` → **未勾選**；`true` → 勾選 | `PdfPreviewDialog.jsx` |
+| 2 | Comparison bars 改為**與畫面共用同一設定**：新增 `comparisonsOn` / `onComparisonChange`，勾選框直接反映 Display ▸ Compare Bars 的狀態，勾／取消都會同步改變畫面 | `PdfPreviewDialog.jsx` / `ExportDialog.jsx` |
+| 3 | PDF **讀取每個 programme 的 `showComparison`**（列迴圈追蹤目前所屬 programme），對比條與對比里程碑都依此決定是否繪製 | `exportGanttPDF.js` |
+| 4 | GanttPage 抽出 `handleSetComparisonBars()` 供 Display 開關與 Print Preview 共用（不再兩份邏輯） | `GanttPage.jsx` |
+
+### 驗收（實測）
+```
+勾選框（SSR 直接渲染面板）
+  printOptions=false        → unchecked ✓（bug 修正）
+  comparisonsOn=false 而 printOption=true  → unchecked ✓（以畫面設定為準）
+  comparisonsOn=true  而 printOption=false → CHECKED   ✓
+PDF 像素（150 dpi 算圖，數紫色 #7c3aed 像素）
+  Display ▸ Compare Bars 開（預設）→ 4356 px
+  Display ▸ Compare Bars 關        → 0 px ✓（且與 ExportDialog 自身關閉選項的輸出「長度完全相同」）
+煙霧測試  → 82 項 OK / 0 FAIL（新增「Print preview · Comparison bars」整項）
+ESLint 0 error；4 個模組 Vite 轉譯 HTTP 200
+```
+
+### 一併修正：測試方法的弱點（工程誠實）
+原本有幾項測試用「兩個 PDF 的 `dataURI` 字串不相等」來證明繪製有變化 —— 但 **jsPDF 每次都會寫入不同的 `CreationDate` 時間戳**，所以兩個 build 永遠不相等，那些斷言其實沒證明任何事。已改為有意義的量測：
+- 文字層 **x 座標**（before < inside < after；拆分的 start < 名稱 < finish）
+- 文字層 **字寬**（15 px 比 10 px 寬、Courier 與 Helvetica 不同）
+- 檔案長度（時間戳寬度固定，可用於「輸出是否有變」）
+- 面板 DOM 的勾選狀態
+
+**RTM（批次 33）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-3301 | Print Preview 的 Comparison bars 勾選狀態必須正確反映設定（false → 未勾選） | PdfPreviewDialog `isChecked()` | Planner wants the print options to be trustworthy | Fixed |
+| FR-3302 | Comparison bars 與畫面 Display ▸ Compare Bars 共用同一設定（單一來源） | GanttPage `handleSetComparisonBars` + ExportDialog | Planner wants chart and paper to agree | Fixed |
+| FR-3303 | PDF 依每個 programme 的 `showComparison` 決定是否繪製對比條／對比里程碑 | exportGanttPDF `sectionAllowsComparison` | Planner wants the print to match the screen | Fixed |
+| AC-3301 | 勾選狀態 5 種組合全部正確；PDF 紫色像素 4356 → 0；與全域關閉選項輸出一致 | 量測（2026-09-21） | Planner wants the print options to be trustworthy | Verified |
+| AC-3302 | 煙霧測試 82 OK / 0 FAIL；並改用文字層座標／字寬取代不可靠的 dataURI 比較 | scripts/smoke-test.mjs | Planner wants reliable regression tests | Verified |
+
+---
+
+## 🩹 批次 34（2026-09-21）— 階梯線又變灰 + Comparison bars 預設值與「勾了沒反應」
+
+### 使用者回報（三個症狀）
+1. Print Preview 裡的 **Staircase line 又變成灰色**。
+2. Comparison bars 的**相關日期對比應該默認不顯示**。
+3. 在 Print Preview **勾選 Comparison bars 也沒有任何額外顯示**。
+
+### 根因（逐一實測）
+1. **階梯線其實還是紅的**（#dc3545、1.7008 pt = 0.6 mm、實心無虛線），問題在**量測尺度選錯**：
+   批次 26c 是用 150–300 dpi 驗收的，但使用者看的是 A3 橫式（420 mm）放進約 1100 px 寬的預覽 iframe ≈ **66 dpi**，
+   0.6 mm 在該尺度只有約 1.5 px，抗鋸齒佔掉一半以上 → 肉眼看就是灰的。
+   同一 fixture 實測 66 dpi：**全強度 654 px、灰階 794 px（灰比紅多）**。
+2. **預設值**：`printOptions.showComparisonBars` 自批次 26 起預設 `true`，於是每次列印都出現紫色的 baseline 對比條。
+3. **勾選無效**：勾選後立即重建預覽用的是**當下的 `tasks`**（React state 還沒套用），
+   而批次 33 在 PDF 端新增的 `sectionAllowsComparison` 閘門讀的正是 programme 的 `showComparison`，
+   舊值為 `false` 時就**什麼都不畫** → 使用者看到「點了沒反應」。
+
+### 修正
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | 階梯線寬度下限 0.6 → **1.0 mm**（上限 1.2 mm），繪製前 `resetLineStyle()` 重設虛線樣式 | `exportGanttPDF.js` |
+| 2 | 「Comparison bars」**列印預設改為 OFF**（畫面 Display ▸ Compare Bars 不受影響，仍預設開） | `ExportDialog.jsx` / `PdfPreviewDialog.jsx` |
+| 3 | 舊設定遷移：新增 `printOptionsVersion`（現為 2）；讀到沒有版本標記的舊設定時**一次性丟棄**舊預設帶來的 `showComparisonBars: true` | `ExportDialog.migratePrintOptions()` |
+| 4 | 勾選框狀態＝**列印選項本身**（不再由畫面旗標決定）；勾選時同步打開 programme 旗標，避免被閘門擋掉 | `PdfPreviewDialog.jsx` |
+| 5 | 重建預覽時帶入 **patched tasks**（`withComparisonFlag()`）→ 勾選立刻生效，不可能再「沒反應」 | `ExportDialog.handleComparisonBarsChange` |
+
+### 驗收（實測）
+```
+階梯線（66 dpi = 預覽實際尺度，同一 fixture 前後對比）
+  修正前：全強度   654 px／灰階   794 px   ← 灰比紅多，看起來就是灰的
+  修正後：全強度  1281 px／灰階   941 px   ← 線寬 2.8346 pt = 1.00 mm
+  放大檢視：線心每一列都是純 #db3645，不再是洗白的粉灰
+PDF 內容串流：階梯線之前的最後一個虛線運算子為空樣式 → 確認實心
+
+Comparison bars（150 dpi 數紫色 #7c3aed 像素）
+  列印預設（未勾選）                          →    0 px ✓
+  未勾選、但畫面 Compare Bars 開（出廠預設）    →    0 px ✓
+  勾選後（畫面旗標原為關，走 patched 重建路徑） → 9192 px ✓ ←「勾了沒反應」修正
+
+煙霧測試 → 83 OK / 0 FAIL（新增「Print PDF · Staircase line stays red at preview zoom」）
+ESLint 0 error；4 個模組 Vite 轉譯 HTTP 200
+```
+
+### 一併修正：量測尺度（工程誠實）
+批次 26c 的「階梯線已修好」是在 **150–300 dpi** 量的，那是預覽尺度的 2～4 倍，
+等於答錯了問題。本批次改用**使用者真正看到的 66 dpi** 驗證，煙霧測試也直接從 PDF 內容串流
+讀出線寬（需 ≥1.00 mm）與虛線狀態，避免再憑高解析假象過關。
+
+**RTM（批次 34）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-3401 | 列印階梯線在預覽尺度仍須清楚呈色（寬度下限 1.0 mm、實心） | exportGanttPDF 階梯線繪製 | Planner wants the printed line to match the chart | Fixed |
+| FR-3402 | Comparison bars 列印預設不顯示（畫面 Compare Bars 不受影響） | ExportDialog `printOptions` | Planner wants a clean default print | Fixed |
+| FR-3403 | Print Preview 勾選 Comparison bars 必須立即畫出紫色對比條 | ExportDialog `withComparisonFlag` + 預覽重建 | Planner wants every switch to do something | Fixed |
+| NFR-3401 | 舊存檔不得讓新預設失效（`printOptionsVersion` 一次性遷移） | ExportDialog `migratePrintOptions` | Planner wants predictable defaults | Fixed |
+| AC-3401 | 66 dpi 量測：全強度像素 654 → 1281、線寬 1.00 mm、無虛線洩漏 | 量測（2026-09-21） | Planner wants the printed line to match the chart | Verified |
+| AC-3402 | 紫色像素：預設 0、未勾選 0、勾選 9192；煙霧測試 83 OK / 0 FAIL | scripts/smoke-test.mjs | Planner wants reliable regression tests | Verified |
+
+---
+
+## 🩹 批次 35（2026-09-21）— 多頁列印：只有最後一頁是紅色，其餘都是灰色
+
+### 使用者回報
+五頁的 programme 列印時，**只有最後一頁的紅線是正確顏色**，其他四頁都是灰色。
+
+### 根因（PDF 內部實證）
+jsPDF 的 `setDrawColor` / `setLineWidth` 會把運算子寫進**呼叫當下所在那一頁**的內容串流。
+階梯線是在迴圈**外面**設定一次樣式，因此：
+- 樣式只落在「呼叫當時剛好是當前頁」的那一頁（列迴圈最後停在最後一頁）→ 只有那一頁是紅色；
+- 其他頁面的串流裡沒有任何樣式運算子 → 使用 PDF 預設狀態（黑色 1 pt）→ 預覽尺度看起來就是灰的。
+
+實證（4 頁 fixture，統計「紅色 stroke 運算子」與逐頁差異像素）：
+```
+修正前：紅色 stroke 運算子全檔 1 個
+  page 1: 階梯線 1079 px，紅色 0%（全灰）
+  page 2-4: 完全沒畫
+修正後：紅色 stroke 運算子全檔 4 個
+  page 1: 2448 px，紅色 66%      page 2: 3845 px，紅色 77%
+  page 3: 3851 px，紅色 65%      page 4: 2283 px，紅色 50%
+  灰／黑像素：四頁合計 7 px（僅邊緣抗鋸齒）
+```
+
+### 順帶修好的第二個多頁缺陷
+原本只要某列的頁碼與 programme 起始頁不同就**直接丟棄**該 step，因此一個 programme 跨頁時，
+階梯線到第一頁底部就斷掉，後面幾頁完全沒有線。現在每個 step 帶自己的頁碼，
+換頁時把「目前最大完成位置（running maximum）」帶到下一頁、從圖表左緣續畫，
+符合畫面上那一條連續折線的樣子。
+
+### 修正
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | 樣式（`resetLineStyle` + `setDrawColor` + `setLineWidth`）改為**每次 `setPage()` 之後**套用（`applyStaircaseStyle()`） | `exportGanttPDF.js` |
+| 2 | step 帶頁碼；跨頁時延續 running maximum，不再丟棄後續 step | `exportGanttPDF.js` |
+| 3 | 煙霧測試新增多頁斷言：紅色樣式運算子數量必須**等於頁數** | `scripts/smoke-test.mjs` |
+
+同批稽核（同類風險）：Today line、Last Recalc line、Holiday shading、Relationship arrows、外框、頁尾
+的樣式設定都已在 `setPage()` **之後**，沒有此問題；對比條在每一頁實測也都是紫色
+（31.7k / 34.8k / 34.7k / 9.5k px，非灰色）。
+
+### 驗收
+```
+煙霧測試 83 OK / 0 FAIL（新增「4 styled pages for 4 printed pages」斷言）
+ESLint 0 error
+```
+
+**RTM（批次 35）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-3501 | 列印時每一頁的階梯線都必須套用自己的樣式（顏色／線寬須在 `setPage()` 之後設定） | exportGanttPDF `applyStaircaseStyle()` | Planner wants the printed line to match the chart | Fixed |
+| FR-3502 | 階梯線跨頁時必須延續，不得在換頁處斷掉 | exportGanttPDF 階梯線 step 帶頁碼 | Planner wants a continuous progress line | Fixed |
+| NFR-3501 | 同類頁面範圍狀態檢查：其餘逐頁繪製元素不得有相同缺陷 | exportGanttPDF（Today／Recalc／Holiday／Arrows／外框／頁尾） | Planner wants predictable output | Verified |
+| AC-3501 | 4 頁 fixture：紅色樣式運算子 1 → 4；每頁階梯線紅色佔比 50–77%、灰黑像素 ≤7 | 量測（2026-09-21） | Planner wants the printed line to match the chart | Verified |
+| AC-3502 | 煙霧測試 83 OK / 0 FAIL，含「每頁都有樣式」斷言 | scripts/smoke-test.mjs | Planner wants reliable regression tests | Verified |
+
+---
+
+## 🔍 批次 36（2026-09-21）— 畫面的 Comparison bars vs 列印的 Comparison bars：完整比對與修正
+
+### 使用者提問
+「基礎頁面（畫面甘特圖）能顯示的兩段對比時長，為什麼在匯出預覽與最終 PDF 裡都沒有了？」
+
+### 完整比對（逐條從程式碼取出，非推測）
+
+| 項目 | 畫面 `UnifiedGanttLayout` | PDF `exportGanttPDF`（修正前） | 修正後 |
+|------|--------------------------|-------------------------------|--------|
+| **對比條何時畫** | 只要「比較日期 ≠ 現行日期」就畫（`hasBL` / `hasLate` / `hasEarly`） | 相同 ＋ **額外被 `showComparison` 閘門擋掉** ✗ | ✅ 與畫面同規則（移除閘門） |
+| **`showComparison`（Display ▸ Compare Bars）** | 只用於 **programme 之間的對比箭頭**；對紫色/棕色對比條**沒有影響** | 批次 33 誤把它當成對比條的總開關 ✗ | ✅ 不再影響對比條 |
+| **總開關** | 無（永遠畫） | Print 選項 `showComparisonBars`（批次 34 起預設 OFF） | 保留（列印專用） |
+| **BL / Late / Early 選擇** | BL 欄隱藏且 Late 可見→Late；再否則 Early；否則 BL | 相同 | 相同 ✅ |
+| **顏色** | **#733208 棕**（opacity 0.85）、對比里程碑空心棕 | **#7c3aed 紫** ✗ | ✅ 改為 #733208 棕 |
+| **表格 BL 欄文字** | #733208 棕 | 紫色 ✗ | ✅ 改為棕 |
+| **位置** | 對比條在**上半**、現行條在**下半** | 相同 | 相同 ✅ |
+| **已刪除列（`deletedFromBL`）** | 不畫對比條 | 仍畫 ✗ | ✅ 不畫 |
+| **日期範圍** | 只由現行 start/end 決定（−7 / +14 天） | 只由現行 start/end 決定（±15 天→月界），比畫面略寬 | 相同 ✅ |
+
+### 主因（為什麼畫面的對比條在 PDF 消失）
+1. **批次 33 的錯誤閘門**（主因）：批次 33 我讓 PDF 依「每個 programme 的 `showComparison`」決定是否畫對比條。
+   但**匯入的程式（XER / Excel parser）把每一列的 `showComparison` 都設成 `false`**（`parseXER.js:284`、`excel_parser.py` 多處），
+   而**畫面根本不看這個旗標** → 畫面上有、列印全部消失。
+2. **列印預設 OFF**（批次 34，你要求的「默認不顯示」）：沒勾選時列印不會有對比條。
+3. 顏色不一致（畫面棕、PDF 紫）讓「畫面上看到的」與「列印出來的」看起來像不同東西。
+
+### 修正
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | 移除 `sectionAllowsComparison` 閘門：對比條改為只受列印選項 `showComparisonBars` ＋「比較日期不同」控制（與畫面同規則） | `exportGanttPDF.js` |
+| 2 | 對比條／對比里程碑／表格 BL 欄文字顏色改為 **#733208 棕**（與畫面一致，紫色 `#7c3aed` 全部移除） | `exportGanttPDF.js` |
+| 3 | `deletedFromBL` 列不畫對比條（畫面的 `isDeleted` 規則） | `exportGanttPDF.js` |
+| 4 | Print 面板提示文字更新（「Purple…」→「brown, same as the chart」） | `PdfPreviewDialog.jsx` |
+| 5 | 煙霧測試改為斷言「與畫面同規則」：匯入檔（`showComparison: false`）＋列印開 ⇒ 與正常情況輸出**完全相同**；刪除列 ⇒ 與「不畫對比條」輸出相同；顏色運算子必須是棕且不得有紫 | `scripts/smoke-test.mjs` |
+
+### 驗收（實測）
+```
+煙霧測試 83 OK / 0 FAIL
+  ・匯入檔（每列 showComparison:false）＋列印開 = 一般輸出一致（修正前 = 「完全不畫」）
+  ・刪除列 = 不畫對比條的輸出
+  ・內容串流：0.45 0.2 0.03 rg（#733208 棕）存在、0.49 0.23 0.93 rg（紫）不存在
+像素（scale=2 算圖）
+  匯入檔＋列印開：棕 13,176 px、紫 0 px；外觀＝上半棕 + 下半青（與畫面同構）
+ESLint 0 error
+```
+
+**RTM（批次 36）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-3601 | 列印對比條必須與畫面同規則（比較日期不同即繪製），不得被 programme 的 `showComparison` 擋掉 | exportGanttPDF（移除 `sectionAllowsComparison`） | Planner wants print == chart | Fixed |
+| FR-3602 | 對比條／對比里程碑／BL 欄文字顏色須與畫面一致（#733208 棕） | exportGanttPDF `COMPARISON_COLOR` | Planner wants print == chart | Fixed |
+| FR-3603 | `deletedFromBL` 列不得繪製對比條 | exportGanttPDF `hasComparison` / `hasCompMile` | Planner wants print == chart | Fixed |
+| — | **FR-3303 已被 FR-3601 取代**（批次 33 的「PDF 依 programme 旗標決定」是錯的） | — | — | Reverted |
+| AC-3601 | 匯入檔＋列印開＝一般輸出；刪除列＝不畫；棕存在／紫不存在；煙霧測試 83 OK / 0 FAIL | 量測（2026-09-21） | Planner wants print == chart | Verified |
+
+---
+
+## 🏷️ 批次 37（2026-09-21）— Display 面板開關正名：「Compare Bars」→「Comparison Arrows」
+
+### 使用者決定
+批次 36 的選項 (A)：不改語意（該開關確實是 **programme 之間的對比箭頭**），但把標籤改清楚，
+避免與 Print Preview 的「Comparison bars」混淆。
+
+### 修正
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | Display 面板標籤 `Compare Bars` → **`Comparison Arrows`**，並加上 tooltip 說明：「Arrows between the current and comparison programmes — the comparison bars themselves follow the compared dates」 | `GanttPage.jsx` |
+| 2 | Display 開關的按鈕加上 `title={item.hint \|\| item.label}`，讓 hint 可作為 tooltip 顯示（原本只顯示標籤） | `GlobalSettingsPanel.jsx` |
+| 3 | 相關註解同步更新（不再寫「Compare Bars」） | `GanttPage.jsx` / `ExportDialog.jsx` / `PdfPreviewDialog.jsx` / `scripts/smoke-test.mjs` |
+| 4 | 面板清單文件同步更新 | `doc/requirements.md`（面板分類表） |
+| 5 | 煙霧測試新增斷言：標籤必須是 `Comparison Arrows`、不得再有 `Compare Bars`，且 hint 有接上 tooltip | `scripts/smoke-test.mjs` |
+
+**語意釐清（現行行為）**
+- **Display ▸ Comparison Arrows**（`showComparison`，每個 programme 一個旗標）→ 控制「現行 programme ↔ 對比 programme」之間的**對比箭頭**與群組。
+- **Print Preview ▸ Comparison bars**（列印選項，預設 OFF）→ 控制列印是否畫出**對比條**。
+- 畫面上的對比條（棕色 `#733208`）只要「比較日期 ≠ 現行日期」就會出現，與上面兩者無關（批次 36 已讓 PDF 同規則）。
+- 勾選列印的 Comparison bars 時，會同時把 `showComparison` 打開，讓畫面的對比箭頭與紙本一致。
+
+### 驗收
+```
+煙霧測試 83 OK / 0 FAIL（斷言：標籤＝Comparison Arrows、無 Compare Bars、tooltip 有接）
+ESLint 0 error
+```
+
+**RTM（批次 37）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-3701 | Display 面板開關改名為「Comparison Arrows」並提供 tooltip，避免與列印的「Comparison bars」混淆 | GanttPage `displayToggles` | Planner wants labels that match what they do | Fixed |
+| FR-3702 | Display 開關須支援 `hint` 作為 tooltip | GlobalSettingsPanel | Planner wants labels that match what they do | Fixed |
+| AC-3701 | 煙霧測試斷言標籤正確且舊標籤不再出現；83 OK / 0 FAIL | scripts/smoke-test.mjs | Planner wants reliable regression tests | Verified |
+
+---
+
+## 🪜 批次 38（2026-09-21）— 畫面的 Staircase line vs 列印的 Staircase line：完整比對與修正（**以畫面為準**）
+
+### 使用者要求
+「兩邊的 Staircase line 顯示結果也存在差異，幫我檢查問題所在，以基礎頁面為主。」
+
+### 完整比對（畫面 `UnifiedGanttLayout`：`bpMap` + `staircases` + `<polyline>` ⚔ PDF `exportGanttPDF`）
+
+| 項目 | 畫面（**基準**） | PDF 修正前 | 修正後 |
+|------|------------------|-----------|--------|
+| 參與的列 | 每個「有位置」的非 section 列；`bpMap` 由 `start/end` 決定，`deletedFromBL` 用 **BL 日期** | 只有「同時有 start 與 end 的長條」✗ | ✅ 同畫面 |
+| **里程碑列** | **參與**（`bpos(start, start)` → 寬 1 天） | 不參與（里程碑沒有位置）✗ | ✅ 參與（1 天寬） |
+| **第一個 section 之前的列** | **參與**（自成 leading group） | 直接跳過（`current == null`）✗ | ✅ 參與 |
+| BulkEditBar「Staircase filter」 | 生效（只畫被選取的列） | 忽略 ✗ | ✅ 生效（新選項 `staircaseFilterIds`） |
+| 線的高度 | 貼齊每個長條的 **上緣**（`idx*ROW_H + (ROW_H−BH)/2`） | 相同（`barTopBase`） | 相同 ✅ |
+| 起點／終點 | 第一列 left → running max，尾端再掉半個 row | 相同 | 相同 ✅ |
+| 只往右前進 | `if (bx2 < mx) continue` | `if (step.right < reach) continue` | 相同 ✅ |
+| 顏色／線寬 | `#dc3545`、2 px（27 px 列高） | `#dc3545`、下限 1.0 mm（批次 34／35 的預覽可讀性） | ✅ |
+| **已刪除列的長條** | `deletedFromBL` → 用 BL 日期定位、畫 **紅** `#dc3545`、不算 critical、不畫對比條 | 完全不畫 ✗ | ✅ 同畫面 |
+| 跨頁 | 畫面無分頁 | 批次 35 起「跨頁延續 running maximum」 | ✅（唯一刻意的差異，見下） |
+
+### 修正
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | 抽出 `collectStaircaseSteps()`：與畫面同規則（leading group／里程碑／filter／丟棄空群組），PDF 與測試共用 | `exportGanttPDF.js` |
+| 2 | 里程碑加入階梯線位置（1 天寬），且**不影響** relationship arrows（另存 `staircasePositions`） | `exportGanttPDF.js` |
+| 3 | `deletedFromBL` 列：以 BL 日期定位、畫紅色長條、排除 critical 判定 | `exportGanttPDF.js` |
+| 4 | 新增 `staircaseFilterIds` 選項，並由 GanttPage → ExportDialog → PDF 傳遞（BulkEditBar 的 Staircase filter） | `GanttPage.jsx` / `ExportDialog.jsx` |
+| 5 | 煙霧測試新增整項「Staircase line takes part the same rows as the chart」 | `scripts/smoke-test.mjs` |
+
+### 驗收（實測）
+```
+fixture：leading 列 + 1 section + 長條 + 里程碑 + 長條 + 已刪除列（僅 BL 日期）
+  修正前：只畫主要群組的長條，里程碑與刪除列不參與
+  修正後：階梯線段數 = 10（leading 1 步 + 主要群組 4 步，每步 2 段）
+  套用 Staircase filter（只選 2 列）→ 4 段 ✓
+  座標換算回日期：A110 09-05..09-20 ✓、里程碑 09-25..09-26（1 天）✓、
+                  A130 09-22..10-05 ✓、刪除列 BL 09-28..10-15 ✓
+  目視：紅線貼齊長條上緣、跨過里程碑菱形後續行、刪除列顯示為紅條
+煙霧測試 84 OK / 0 FAIL；ESLint 0 error
+```
+
+### 唯一刻意的差異（未改，待你決定）
+畫面若**收合（collapse）**某些 section，那些列不在 `displayTasks` 內 → 畫面的階梯線會跳過它們；
+列印一律印出所有列，因此階梯線也會經過它們。若你要「列印也跟著收合狀態」請告知（需把 `collapsedIds` 傳進 PDF）。
+
+**RTM（批次 38）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-3801 | 列印階梯線必須與畫面同規則：領先群組、里程碑、`deletedFromBL` 列皆須參與 | exportGanttPDF `collectStaircaseSteps()` | Planner wants print == chart | Fixed |
+| FR-3802 | 里程碑以「1 天寬」的位置參與階梯線（`bpos(start,start)` 等價），且不得改變 relationship arrows 行為 | exportGanttPDF `staircasePositions` | Planner wants print == chart | Fixed |
+| FR-3803 | `deletedFromBL` 列以 BL 日期定位並以 `#dc3545` 紅條繪製 | exportGanttPDF 列迴圈 | Planner wants print == chart | Fixed |
+| FR-3804 | 列印階梯線須尊重畫面的 BulkEditBar「Staircase filter」 | `staircaseFilterIds`（GanttPage → ExportDialog → PDF） | Planner wants print == chart | Fixed |
+| AC-3801 | fixture 段數 10／篩選後 4；座標換算日期全部吻合；煙霧測試 84 OK / 0 FAIL | 量測（2026-09-21） | Planner wants print == chart | Verified |
+
+---
+
+## 📐 批次 39（2026-09-21）— Comparison Arrows（programme 完工日差幾天）也能列印到 PDF
+
+### 使用者要求
+「顯示兩部分 programme 之間的 Finish date 相差多少 days 的 Comparison Arrows，
+也應該能夠被點選顯示在匯出的 pdf 中。」
+
+### 畫面原本的實作（基準，`UnifiedGanttLayout` ▸ `cmp-*`）
+- 只有**相鄰的兩個 programme**（`staircases` 群組）且**兩者的 Compare 旗標都不是 false** 才畫。
+- `x1/x2` = 該 programme「最右邊的長條邊緣」（`gex` = `max(pos.left + pos.width)`）。
+- `d1/d2` = 該 programme「最晚的完成日」（`ged` = `max(end || start)`）。
+- 內容：兩個完工日各一條**棕色 `#733208` 虛線豎線**＋**菱形**；兩者之間一條**雙向箭頭**（箭頭朝外），
+  畫在**第二個 programme 的 section 列**中央；中間一個**白底標籤**顯示 `{n} WD` 或 `{n} Cal`：
+  `Cal = |differenceInDays(d1,d2)| + 1`、`WD = countWorkingDays(較早, 較晚)`。
+
+### 修正
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | PDF 新增 `showComparisonArrows` 選項，依畫面同一套規則繪製（虛線豎線貫穿每一頁的圖表區、菱形、雙向箭頭、`{n} WD/Cal` 白底標籤） | `exportGanttPDF.js` |
+| 2 | 尺寸依 `effectiveRowH / 27` 等比換算（與長條／階梯線同一比例），線寬／字級設有下限以維持列印可讀性 | `exportGanttPDF.js` |
+| 3 | `collectStaircaseSteps()` 的每個群組額外帶 `showComparison`、`sectionIdx`（箭頭要畫在哪一列）與每步的 `finish`（畫面的 `ged`） | `exportGanttPDF.js` |
+| 4 | Print Preview 面板新增列印開關「**Comparison arrows**」（預設 OFF） | `PdfPreviewDialog.jsx` |
+| 5 | 勾選時同時打開 programme 的 Compare 旗標並以 patched tasks 重建預覽 → 匯入檔（旗標為 false）也能一勾就出現，不會再有「點了沒反應」 | `ExportDialog.handleComparisonArrowsChange` |
+| 6 | 煙霧測試新增整項「Print PDF · Comparison arrows」 | `scripts/smoke-test.mjs` |
+
+### 驗收（實測）
+```
+fixture：Current programme 完工 2026-09-30、Comparison programme 完工 2026-10-20
+  打開選項：PDF 文字層出現 "21 Cal"（= |20 天| + 1 ✔ 與畫面公式相同）
+            內容串流有 2 個虛線運算子 [3.40 2.27] 0. d（兩個完工日豎線）＋ 棕色 0.451 0.196 0.031 rg
+  durMode = wd：標籤 "17 WD"（香港工作日，扣除 10-01 國慶）
+  關閉選項：沒有任何標籤 ✓
+  兩個 programme 的 Compare 旗標為 false：沒有標籤 ✓（與畫面同一道閘門）
+  面板：Print Preview ▸ Print content 出現「Comparison arrows」且預設未勾選 ✓
+  目視：虛線豎線、菱形、雙向箭頭、白底「21 Cal」標籤，與畫面一致
+煙霧測試 85 OK / 0 FAIL；ESLint 0 error
+```
+
+**RTM（批次 39）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-3901 | Print Preview 必須提供「Comparison arrows」列印開關（預設 OFF） | PdfPreviewDialog `PRINT_CONTENT` | Planner wants the chart annotation on paper | Fixed |
+| FR-3902 | PDF 依畫面規則繪製對比箭頭（相鄰 programme、`gex` 為 x、`ged` 為完工日、`\|diff\|+1`／`countWorkingDays` 標籤） | exportGanttPDF `showComparisonArrows` | Planner wants print == chart | Fixed |
+| FR-3903 | 勾選時須同時打開 programme 的 Compare 旗標並即時重建預覽（匯入檔也能一勾就出現） | ExportDialog `handleComparisonArrowsChange` | Planner wants every switch to do something | Fixed |
+| NFR-3901 | 開關預設 OFF，未勾選時輸出與之前完全相同（其他選項不受影響） | exportGanttPDF / ExportDialog | Planner wants a clean default print | Verified |
+| AC-3901 | 標籤 "21 Cal"／WD 模式 "17 WD"；關閉或旗標為 false 時無標籤；虛線運算子 2 個；煙霧測試 85 OK / 0 FAIL | 量測（2026-09-21） | Planner wants print == chart | Verified |
+
+---
+
+## 🗑️ 批次 40（2026-09-21）— Programme 列（section）也加上跟其他列一樣的刪除鍵
+
+### 使用者要求
+「跟其他 item 欄目一樣，在左欄欄目内的右邊增加一個刪除鍵。」
+
+### 原本的狀況
+- 活動列的左欄最右邊（Duration 儲存格內）已有一個垃圾桶圖示：滑鼠移上去才出現，按一下即刪除該列
+  （`UnifiedGanttLayout.jsx` ▸ `case "duration"`，`opacity-0 group-hover:opacity-100`）。
+- **programme（section）列不走逐欄渲染**：它的左欄是一個 flex 容器（收合箭頭 ＋ 名稱輸入框），
+  所以那個垃圾桶不會出現 ✗ → 只能靠右鍵選單 `Delete Row` 刪除。
+
+### 修正
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | programme 列的名稱輸入框**右邊**加上同一顆垃圾桶按鈕（同樣的 class／圖示大小／hover 行為，`stopPropagation` 以免觸發列選取） | `UnifiedGanttLayout.jsx`（`{isSec ? (` … `) : (` 分支） |
+| 2 | 兩顆垃圾桶都加上 `title="Delete row (Ctrl+Z to undo)"` 與 `type="button"`（可測試、也提示可復原） | `UnifiedGanttLayout.jsx` |
+| 3 | 煙霧測試新增整項「Row delete button on every row (programmes included)」 | `scripts/smoke-test.mjs` |
+
+### 驗收（實測）
+```
+SSR 渲染 layout（fixture：1 個 programme 列 + 2 個活動列）
+  → 刪除按鈕數量 = 3（每列一個，含 programme 列）✓
+  → programme 列的按鈕位於其名稱輸入框之後（同一 flex 容器內、容器右端）✓
+  → 原始碼檢查：section 分支內含 del(task.id) 與 <Trash2 size={10} />，且全檔共有 2 顆（programme + 活動）✓
+抽樣 DOM：chevron@8172 … delete@8866（箭頭在前、刪除鍵在後，名稱輸入框位於兩者之間）
+煙霧測試 86 OK / 0 FAIL；ESLint 0 error；Vite 轉譯 200
+```
+
+**操作方式**：滑鼠移到 programme 列（例如殘留的 “New Programme”）→ 右端出現 🗑️ → 按一下即刪除；刪錯可按 **Ctrl+Z** 復原。
+
+**RTM（批次 40）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-4001 | programme（section）列在左欄右端須提供與活動列相同的刪除按鈕 | UnifiedGanttLayout section 分支 | Planner wants one consistent way to delete a row | Fixed |
+| FR-4002 | 刪除按鈕不得觸發列選取（`stopPropagation`）且可復原（沿用 `del()` 的歷史紀錄） | 同上 | Planner wants safe editing | Fixed |
+| AC-4001 | fixture 3 列 → 3 顆刪除按鈕；section 分支含 `del(task.id)`；煙霧測試 86 OK / 0 FAIL | 量測（2026-09-21） | Planner wants one consistent way to delete a row | Verified |
+
+---
+
+## ✂️ 批次 41（2026-09-21）— 單點刪除 programme 只刪那一列（不連同下方活動列）
+
+### User Story
+As a **planner**, I want **clicking the delete button on a programme row to remove only that programme row**, so that **the activities listed under it are not lost by accident**.
+
+### 需求釐清（使用者確認）
+「單一點選刪除 programme 時，只刪除 programme，不包括下方其他活動列。」
+
+### 現況（已符合，非新增行為）
+刪除路徑只有兩種，都**沒有**任何串聯刪除：
+
+| 路徑 | 實作 | 結果 |
+|------|------|------|
+| 左欄垃圾桶（活動列 Duration 儲存格／programme 列右端） | `del(task.id)` → `setTasks(p => p.filter(t => t.id !== id))` | **只刪那一列** |
+| 右鍵選單 ▸ 🗑️ Delete Row | 同上（`action === "delete"` → `del(task.id)`） | **只刪那一列** |
+| BulkEditBar ▸ Delete（批次） | `updated.filter(t => !selectedIds?.has(t.id))` | 只刪**被選取**的 ids（要整段刪除時，用 Ctrl+Click 把 programme 列一起選進來） |
+
+刪除後，下方活動列會留在原位、只是上方不再有 programme 標題（各活動列自己的欄位／日期／連結完全不動）。
+
+### 補強：把這個行為鎖進測試（避免日後不小心加出串聯刪除）
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | 煙霧測試新增整項「Deleting a programme row keeps the activity rows below it」：<br>· 原始碼：`del()` 必須是 `filter(t=>t.id!==id)` 且**不得提及 `isSection`**（＝沒有連子列一起刪）<br>· 批次刪除必須只依 `selectedIds`<br>· SSR：刪掉 programme 列後的畫面仍要有兩個活動列、且 programme 標題消失 | `scripts/smoke-test.mjs` |
+
+### 驗收（實測）
+```
+SSR（fixture：1 programme + 2 活動）
+  刪除 programme 後：activitiesKept=true（Excavate / Piling 都還在）
+                     programmeGone=true（New Programme 標題消失）
+  原始碼：idOnly=true（del 僅按 id 過濾、無 isSection）／bulkOnly=true／noCascade=true
+煙霧測試 87 OK / 0 FAIL；ESLint 0 error；UnifiedGanttLayout 轉譯 200
+```
+
+**RTM（批次 41）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-4101 | 單點刪除 programme 列只刪該列，不得連同下方活動列一起刪除 | UnifiedGanttLayout `del()` | Planner wants safe row deletion | Verified |
+| FR-4102 | 刪除後活動列必須完整保留（欄位／日期／連結不變），只是沒有 programme 標題 | UnifiedGanttLayout 列渲染 | Planner wants safe row deletion | Verified |
+| AC-4101 | SSR：刪除後仍渲染 2 個活動列、programme 標題消失；`del()` 為 id-only filter；煙霧測試 87 OK / 0 FAIL | 量測（2026-09-21） | Planner wants safe row deletion | Verified |
+
+---
+
+## 🩺 批次 42（2026-09-21）— 排查「本地後端未啟動 — 請執行 scripts\start-backend.bat」
+
+### 症狀
+App 出現：`本地後端未啟動 — 請執行 scripts\start-backend.bat（或 set START_BACKEND=1 後跑 scripts\start-all.bat）`
+
+### 診斷（逐項實測）
+| 檢查 | 結果 |
+|------|------|
+| 訊息來源 | `src/lib/localApi.js` 的 `BACKEND_HINT`：`/local-api/...` 連不上時丟出（`ProjectBar.jsx` 用它顯示錯誤） |
+| 這個後端是什麼 | 工作區根目錄的 FastAPI scaffold：`P6 Reader & Converter\backend\`（`main.py` 有 `GET /health`、`projects`/`versions` routers；DB `backend/db/pyworkflow.db`）。**只服務 ProjectBar 的「選擇專案／上傳／存檔」** |
+| 前端如何連它 | `vite.config.js`：`/local-api` → `http://localhost:${BACKEND_PORT}`；`BACKEND_PORT` 讀自工作區根目錄 `.env` = **25156** |
+| 當時狀態 | **port 25156 沒有在監聽** → 後端確實沒啟動（`Get-NetTCPConnection` 無結果）✓ 症狀成立 |
+| 為何沒被啟動 | 根目錄 `scripts\start-all.bat` 說明：後端是 opt-in（`set START_BACKEND=1`）；App 自己的 `scripts\` 只有 `start-local.bat`（純前端）→ 只跑前端的啟動方式不會帶起後端 |
+
+### 處理
+| # | 內容 |
+|---|------|
+| 1 | 依專案規則用**根目錄腳本**啟動：`scripts\start-backend.bat`（讀 root `.env` 的 `BACKEND_PORT` → `uv sync` → `uv run uvicorn main:app --port 25156`） |
+| 2 | 因為是前景服務，這裡以背景方式啟動（隱藏視窗、log 寫到 `%TEMP%\p6-backend.log`）；平常請在自己的 cmd 視窗執行該腳本 |
+| 3 | 訊息文字更清楚：註明要在**工作區根目錄**執行，並說明此後端只用於「選擇專案／存檔」 |
+
+### 驗收（實測）
+```
+Uvicorn: "Application startup complete" / "Uvicorn running on http://0.0.0.0:25156"（pid 28220）
+port 25156 listening  = True
+GET  http://localhost:25156/health              -> 200 {"status":"ok"}
+GET  http://localhost:15156/local-api/projects  -> 200 []        ← App 實際走的代理路徑（修好）
+ESLint(src/lib/localApi.js) = 0 error；煙霧測試對 BACKEND_HINT/localApi 的引用數 = 0（字串變更不影響測試）
+```
+
+### 日常操作
+- 啟動後端（cmd.exe，工作區根目錄）：`scripts\start-backend.bat`
+- 或一次帶起前後端：`set START_BACKEND=1 && scripts\start-all.bat`（後端失敗只算警告，見該腳本說明）
+- 檢查狀態：`scripts\status.bat`；全部停止：`scripts\stop-all.bat`
+- 沒有後端時 App 仍可正常使用，只有 ProjectBar 的專案／版本功能會顯示上述提示
+
+**RTM（批次 42）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-4201 | 「本地後端未啟動」提示須明確指出應在工作區根目錄執行 `scripts\start-backend.bat`，並說明其用途 | `src/lib/localApi.js` `BACKEND_HINT` | Planner wants actionable error messages | Fixed |
+| NFR-4201 | 後端未啟動時 App 其餘功能不受影響（僅 ProjectBar 專案／版本功能提示） | Vite proxy + ProjectBar | Planner wants a resilient app | Verified |
+| AC-4201 | 後端啟動後 `GET /health` 200、經代理的 `/local-api/projects` 200；port 25156 監聽中 | 量測（2026-09-21） | Planner wants a working local backend | Verified |
+
+---
+
+## 📋 批次 43（2026-09-21）— 全面功能現況檢查（環境／測試／功能盤點）
+
+### 一、環境與服務
+| 項目 | 結果 | 證據 |
+|------|------|------|
+| 前端（Vite） | ✅ 運行中 | port **15156** 監聽中；`GET /` → 200 |
+| 本地後端（FastAPI） | ✅ 運行中 | port **25156** 監聽中；`GET /health` → `{"status":"ok"}`；經 Vite 代理 `GET /local-api/projects` → 200 |
+| 後端 CRUD 實測 | ✅ 專案建立／版本存檔／列出／刪除全部成功 | `POST /projects` → id；`POST /projects/{id}/versions` → `task_count:1`；`GET .../versions` → 1 筆；`DELETE` → 200；**測試資料已全部刪除，`GET /projects` 回到 `[]`** |
+| 資料庫 | ✅ | `backend/db/pyworkflow.db`（原本 0 個專案，檢查後仍為 0） |
+| ESLint（全專案 `eslint . --quiet`） | ✅ | exit 0、0 問題 |
+| 煙霧測試 | ✅ | **87 OK / 0 FAIL**（218 行輸出） |
+
+### 二、功能盤點（全部有測試或實測覆蓋）
+| 領域 | 覆蓋內容 | 狀態 |
+|------|----------|------|
+| **匯入** | XER（WBS 層級、空 WBS 標記、關係 TASKPRED）、Excel（P6 樣式）、P6 XML（links[]／succCode fallback）、PDF 文字分批（24k 截斷已移除）、掃描 PDF + AI vision（18 欄 schema、頁碼 1..N、2800px 渲染、低列數重試）、**本機 OCR**（ppocr／ollama／pstocr 引擎註冊、launcher、UI 自動啟動）、textChunks 分批與合併 | ✅ |
+| **PDF 內嵌資料往返** | 4 筆／600 筆多 chunk（15 頁）／legacy V2 → 匯出再上傳欄位完全一致（免 AI 還原） | ✅ |
+| **甘特圖** | WBS 列配色（classic／cool-blues／per-level／override／clamp）、收合、focus 模式、長條外觀（preset／critical／delay／milestone）、Bar text（inside／before／after、字體／字級／內外色）、Bar Info 3 開關、**不再截斷**（量測式排版）、拆分日期（start 前／finish 後）、階梯線、對比條、對比箭頭、關係箭頭 | ✅ |
+| **列印／匯出** | Print Preview 面板（8 個列印選項）、頁面設定（A3/A4、方向、邊界、頁尾 `{page}/{pages}`）、PDF、Excel（P6 樣式）、XER、P6 XML、關係 XML | ✅ |
+| **編輯操作** | 選取（click／Ctrl+Click／Ctrl+Shift 範圍）、BulkEditBar（套色／綁鏈／解除／刪除／Staircase filter）、Undo/Redo（Ctrl+Z／Ctrl+Y）、右鍵選單（新增列／WBS 7 級／縮排凸排／改色／Comparison 標記／刪除）、每列刪除鍵（含 programme；單點只刪該列不串聯）、快照、比較／合併 | ✅ |
+| **篩選與檢視** | Quick filters（status／started／milestones／critical）、badge 數學、Last Recalc Date 綁定、8 個篩選範本、FilterDialog、欄位顯示／View Presets、日期格式／格線／時間刻度 | ✅ |
+| **設定面板** | GlobalSettingsPanel（5 分類 + 可拖曳 + Local OCR）、Display 開關（Holiday／Staircase／Relationship／**Comparison Arrows**（批次 37 改名）／Diff Only／Relation Filter）、WbsSettingsPanel、GanttSettingsPanel、GanttInfoPanel（7 分頁） | ✅ |
+| **專案管理** | ProjectBar（本地專案／版本：選擇、建立、存檔、讀取、刪除）＋ 後端提示訊息（批次 42） | ✅ |
+
+### 三、本次檢查發現（未動，供決策）
+| # | 發現 | 建議 |
+|---|------|------|
+| 1 | `dist/` 建置產物**已過期**（`index-CVzS5iRF.js`，2026-09-21 13:59，仍含舊的 `BACKEND_HINT` 字串） | 若要部署或以 `dist` 預覽，需重新 `vite build` |
+| 2 | **死碼**：`src/components/gantt/TaskTable.jsx`、`GanttChart.jsx` 被引用 0 次 | 可刪除（或保留作參考） |
+| 3 | 工作區所有批次（23–42）**尚未 commit**；`main` 與 `origin/main` 在 `59dbdc1`，無未推送 commit | 需 commit + push 才會上 GitHub |
+| 4 | 煙霧測試輸出中的 pdfjs `standardFontDataUrl` 警告 | Node 環境正常現象，不影響結果 |
+| 5 | 收合的 section 在列印時仍全部印出（批次 38 已列為刻意差異） | 如要 100% WYSIWYG 需把 `collapsedIds` 傳進 PDF |
+
+**RTM（批次 43）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| NFR-4301 | 交付前須有可重複的全功能健康檢查（環境 + 測試 + lint + API 實測） | scripts/smoke-test.mjs / ESLint / backend API | Planner wants confidence before shipping | Verified |
+| AC-4301 | 前端 200、後端 /health 200、`/local-api/projects` 200、ESLint 0 問題、煙霧測試 87 OK / 0 FAIL、後端 CRUD 四項操作全通且無殘留資料 | 量測（2026-09-21） | Planner wants confidence before shipping | Verified |
+
+---
+
+## 🌴 批次 44（2026-09-21）— Holiday Markers 預設關閉 ＋ 與 Today Line 拆成獨立開關
+
+### 使用者要求
+「Holiday Markers 默認為關閉」
+
+### 修正前的狀況（兩個問題）
+1. **畫面預設是開的**：`GanttPage.jsx` 的 `const [showToday, setShowToday] = useState(true)`。
+2. **假日標記與今日線綁在一起**：`UnifiedGanttLayout.jsx` 有 `const showHolidays = showToday;`
+   （註解也寫「Holiday markers are shown together with Today line」），而 Display 面板那顆開關標示為
+   「Holiday Markers」卻同時控制今日線 → 想關掉假日標記就會**順便關掉今日線**。
+   （列印端的兩個選項 `showHolidays` / `showToday` 本來就是分開且預設關閉 ✓）
+
+### 修正
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | 新增獨立的 `showHolidays` 狀態，**預設 `false`** | `GanttPage.jsx` |
+| 2 | Display 面板拆成兩顆開關：**Holiday Markers**（`showHolidays`，預設關）＋ **Today Line**（`showToday`，維持預設開），各自附 tooltip | `GanttPage.jsx` |
+| 3 | Layout 收下 `showHolidays` prop（預設 `false`），移除 `showHolidays = showToday` 的耦合 | `UnifiedGanttLayout.jsx` |
+| 4 | 煙霧測試新增整項「Holiday Markers (chart) default OFF + separate from the Today line」 | `scripts/smoke-test.mjs` |
+
+### 驗收（實測）
+```
+SSR（fixture 2026-09-01..2026-10-20，含 10-01 國慶）
+  showHolidays 未指定（預設）→ 假日色帶 0 個 ✓（預設關閉）
+  showHolidays: true        → 假日色帶 3 個 ✓（可正常開啟）
+  showHolidays: false 時今日線仍會繪製 ✓（已解耦）
+原始碼：GanttPage `useState(false)` ✓；Display 面板 `on: showHolidays` 與 `on: showToday` 分開 ✓；
+        layout 收到 `showHolidays={showHolidays}` ✓
+煙霧測試 88 OK / 0 FAIL；ESLint 0 error；Vite 轉譯 200
+列印端維持原本的預設關閉（`showHolidays` / `showToday` 皆 false，批次 26 測試仍通過）
+```
+
+**RTM（批次 44）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-4401 | 畫面假日標記（Holiday Markers）預設必須為關閉 | GanttPage `showHolidays` 狀態 | Planner wants a clean default chart | Fixed |
+| FR-4402 | 假日標記與今日線須為兩個獨立開關（關假日不得影響今日線） | GanttPage Display 面板 + UnifiedGanttLayout prop | Planner wants independent display switches | Fixed |
+| AC-4401 | 預設 0 個假日色帶、開啟時 3 個；假日關閉時今日線仍在；煙霧測試 88 OK / 0 FAIL | 量測（2026-09-21） | Planner wants a clean default chart | Verified |
+
+---
+
+## 🈶 批次 45（2026-09-21）— 嵌入 CJK 字型：中文列印成真正的文字（不再是 `????`）
+
+### 使用者要求
+「先做 b」——嵌入 CJK 字型，讓 PDF 中文正常顯示（原本是 `????`）。
+
+### 技術驗證（先做實驗才實作）
+| 問題 | 實驗結果 |
+|------|----------|
+| jsPDF 會不會 subset？ | **會** ✓ 嵌入 11.4 MB 中文字型、畫兩行中文 → PDF 只有 **275 KB** |
+| 文字層能取回中文嗎？ | **能** ✓ `pypdfium2` 取回 `'樁基工程 Piling 2026-09-01\r\n鋼筋混凝土樓板 Slab'`（可選取、可搜尋的真文字） |
+| 字型授權？ | **SIL OFL 1.1** ✓ 字型 name table：`Copyright 2014-2021 Adobe …, with Reserved Font Name 'Source'`（＝ Noto Sans HK／Source Han Sans），與 `public/fonts/OFL.txt` 全文一致 → 可隨專案散布並嵌入 PDF |
+| 為何不用 OTF/TTC？ | jsPDF 需要 `glyf` 輪廓的單一 **TrueType (.ttf)**；OTF/CFF 與 `.ttc` 集合都不支援 |
+
+### 實作
+| # | 內容 | 位置 |
+|---|------|------|
+| 1 | 字型資產：`public/fonts/NotoSansHK-VF.ttf`（11.36 MB，Noto Sans HK）、`OFL.txt`（授權全文）、`README.md`（來源／授權／如何更換） | `public/fonts/` |
+| 2 | 新模組 `cjkFont.js`：`hasNonLatinText()`、`programmeNeedsCjk()`（含標題／公司／頁尾）、`loadCjkFont()`（HTTP 取得 → 分塊 base64 → 記憶體快取）、`cjkFontBase64()`、`CJK_FONT_URL/NAME/LABEL` | `src/lib/cjkFont.js` |
+| 3 | PDF builder 新增 `cjkFont: { name, base64 }`：`addFileToVFS` + `addFont`，並**攔截 `doc.setFont`** 把 `helvetica/courier/times` 一律導向 CJK 字型（單一字重，粗體／斜體正規化），同時 `sanitizePDFText()` 在啟用時**保留** Unicode（不再換成 `?`），build 結束後清除模組旗標 | `src/lib/exportGanttPDF.js` |
+| 4 | Print Preview 新增「**Chinese / CJK text**」開關（預設 ON）：**只在程式含非 Latin-1 文字時**才抓字型（拉丁文專案完全不抓 11 MB）；顯示狀態（ready／loading／error） | `PdfPreviewDialog.jsx` |
+| 5 | ExportDialog：`embedCjkFont` 列印選項、`needsCjk` memo、載入 effect、字型到達時**自動重建已開啟的預覽**（避免第一次看到 `?`）、`handleCjkFontChange` | `ExportDialog.jsx` |
+| 6 | 煙霧測試新增整項「PDF · Chinese text (embedded CJK font, subsetted)」 | `scripts/smoke-test.mjs` |
+
+### 驗收（實測）
+```
+煙霧測試 89 OK / 0 FAIL；ESLint 0 error
+
+PDF 文字層（fixture：樁基工程／鋼筋混凝土樓板 Slab／竣工里程碑／啟德發展計劃）
+  有字型：文字層包含全部中文字串 ✓；PDF 288 KB
+  無字型：中文字串不存在、仍為 "?" ✓（向後相容，未勾選時行為不變）
+  字型 subset 保護：< 2 MB（避免哪天變成整份 11 MB）
+  資產：public/fonts/NotoSansHK-VF.ttf（> 5 MB）＋ OFL.txt 含 "SIL Open Font License, Version 1.1" ✓
+
+模擬瀏覽器完整流程（從 dev server 抓字型 → build → 抽文字層）
+  GET /fonts/NotoSansHK-VF.ttf → 200，11.36 MB ✓
+  PDF 292 KB ✓
+  programmeNeedsCjk(中文專案) = true；hasNonLatinText("Excavate") = false ✓（拉丁文專案不會下載字型）
+  文字層包含 試樁及樁帽施工／鋼筋混凝土樓板／啟德發展計劃／範例工程有限公司 ✓（四項全中）
+
+目視（算圖）
+  有字型：範例工程有限公司／啟德發展計劃 - 第三期／樁基工程 (Piling Works)／試樁及樁帽施工 正常顯示 ✓
+  無字型：??????? （原本行為）
+```
+
+### 已知限制（誠實說明）
+1. 字型為**單一字重** → PDF 的粗體／斜體會被正規化（jsPDF 無法用嵌入字型合成粗體）；純拉丁文且未啟用時不受影響。
+2. 首次使用需下載 11 MB（Vite dev／部署主機皆為靜態資產 ✓ 之後由瀏覽器快取）。
+3. **非 BMP 罕見字**（CJK 擴充 B 區以後、emoji）可能缺字；常用繁簡中文、HK 變體字形完整。
+4. 字型檔案會進 git（11.36 MB）；`.gitignore` 不會排除 `public/` ✓（已用 `git check-ignore` 確認）。
+
+**RTM（批次 45）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-4501 | PDF 中的中文（活動名稱、專案標題、公司、頁尾）必須列印成真正的文字而非 `????` | exportGanttPDF（嵌入 CJK 字型） | Planner wants Chinese programmes to print correctly | Fixed |
+| FR-4502 | CJK 字型只在程式含非 Latin-1 文字且選項開啟時才載入（拉丁文專案不受影響、不增加 PDF 大小） | cjkFont.js `programmeNeedsCjk` + ExportDialog | Planner wants no wasted work | Fixed |
+| FR-4503 | Print Preview 須提供「Chinese / CJK text」開關與載入狀態（ready／loading／error） | PdfPreviewDialog | Planner wants to see what happens | Fixed |
+| NFR-4501 | 嵌入字型必須被 subset（PDF 不得膨脹為 11 MB）；未啟用時輸出行為與舊版相同 | exportGanttPDF / smoke test guard | Planner wants small files | Verified |
+| NFR-4502 | 字型須為可再散布授權並附授權全文（SIL OFL 1.1） | public/fonts（字型 + OFL.txt + README） | Legal/compliance | Verified |
+| AC-4501 | 文字層可取回中文字串；288 KB（有字型）vs 11 KB（無）；HTTP 200 取得 11.36 MB；89 OK / 0 FAIL | 量測（2026-09-21） | Planner wants Chinese programmes to print correctly | Verified |
+
+---
+
+## 📦 Batch 46 — start-all 一次啟動全部服務（前端＋後端＋OCR 插件）
+
+### 使用者需求（2026-09-21）
+> 「當我啓動 `scripts\start-all.bat` 時就應該將所有相關前後端以及插件全部啓動了。」
+
+### User Story
+As an **operator**, I want **`scripts\start-all.bat` to bring up the frontend, the local backend and the local OCR plugin in one command**, so that **I never have to remember which of the five services is still missing**.
+
+### Requirements
+- **Functional**
+  - FR-4601：`start-all.bat/.sh` 預設啟動**三群**服務：①前端（Vite，`FRONTEND_PORT`）②本地 FastAPI 後端（`BACKEND_PORT`）③OCR 插件＝PP-OCR helper（`:8199`）＋它可帶起的引擎（`pstocr :7861`、`ollama :11434`）。
+  - FR-4602：OCR helper 未啟動時，`.bat` 以 `OCR_HELPER_BAT`（預設 `C:\dev\paddle-ocr\run-ocr-server.bat`）帶起；`.sh` 用 `OCR_HELPER_CMD`（未設定則只提示）。
+  - FR-4603：helper 起來後對 `/launch/start`（`{"id":"pstocr"}`、`{"id":"ollama"}`）各發一次請求（idempotent；已在跑的引擎回 `alreadyRunning`）。
+  - FR-4604：`status.bat/.sh` 增加「Local OCR plugin」段：helper 是否在跑、兩個引擎各自 running／stopped。
+  - FR-4605：`stop-all.bat/.sh` 預設**不動** OCR（可能與其他工具共用）；`STOP_OCR=1` 才對 `/launch/stop` 發請求。
+- **Non-Functional**
+  - NFR-4601：`.env` 仍為**唯一**埠來源（`FRONTEND_PORT`／`BACKEND_PORT`）且**未修改**；OCR 端點預設值與 `src/lib/localOcr.js` 一致，可用選配鍵 `OCR_LAUNCHER_URL`／`OCR_HELPER_BAT` 覆寫。
+  - NFR-4602：後端／OCR 失敗只 **WARNING**，不阻斷（前端失敗才 exit 1）。
+  - NFR-4603：可退出：`SKIP_BACKEND=1`、`SKIP_OCR=1`（`START_BACKEND=1` 保留但已無作用＝預設）。
+  - NFR-4604：`start-all` 保持 idempotent（重跑時「已在跑 → 跳過」）。
+- **Constraints**
+  - 只動 `scripts/**`；`.env`、`devops/**`、`src/**` 不改。
+  - `.bat` 保持 ASCII 訊息＋CRLF；`.sh` 同步相同行為。
+
+### 實作
+| 檔案 | 變更 |
+|---|---|
+| `scripts/start-all.bat` | 後端改為**預設啟動**（`SKIP_BACKEND=1` 才略過）；新增 OCR 段（helper → 等就緒 → 對兩引擎發 `/launch/start`）；彙總列出 App／Backend／OCR plugin 三段狀態 |
+| `scripts/start-all.sh` | 同步（OCR helper 以 `OCR_HELPER_CMD` 選配啟動） |
+| `scripts/status.bat`、`status.sh` | 新增 OCR 段 + `:ocr_engine`（解析 `/launch/services` 的 `"running": true`） |
+| `scripts/stop-all.bat`、`stop-all.sh` | 新增 `STOP_OCR=1`（`/launch/stop`），預設不動 OCR |
+| 四支 `.bat` | `ROOT_DIR` 以 `for %%I in ("%~dp0..") do set "ROOT_DIR=%%~fI"` 正規化（輸出不再出現 `\scripts\..`） |
+
+### 驗證（2026-09-21）
+```
+scripts\stop-all.bat   → 15156 / 25156 killed；8199 / 7861 / 11434 保留（自訂 STOP_OCR=1 才停）
+scripts\start-all.bat  → Frontend is ready / Backend is ready
+                         OCR helper already running (http://127.0.0.1:8199)
+                         OCR engine pstocr: start requested / ollama: start requested
+                         彙總 App + Backend running + OCR plugin running，exit 0
+再跑一次 start-all      → Frontend / Backend already running - skipping start（idempotent，exit 0）
+scripts\status.bat      → port 15156 / 25156 正確讀取；OCR helper RUNNING + pstocr / ollama running
+```
+
+### 踩到並修掉的坑
+- **cmd `if` 引號不對稱**：`if /i "%%A"==FRONTEND_PORT` 永遠不成立（左側有引號、右側沒有）→ 整個 `.env` 讀取失效、埠印成空白。`.bat` 一律寫成 `if /i "%%A"=="FRONTEND_PORT"`。
+- `.bat` 內 `echo` 段若含 `%ROOT_DIR%`（路徑帶 `&`）必須**加引號**（`"..."`），否則 `&` 會被 cmd 當成命令分隔。
+- 既有 `.bat`／本文件是 CRLF：用 LF 樣式做比對會失敗 → 追加改用行號（append at EOF）或單行錨點。
+
+**RTM（批次 46）**
+
+| Requirement ID | Requirement Description | Feature/Module | User Story Reference | Status |
+|----------------|-------------------------|----------------|----------------------|--------|
+| FR-4601 | start-all 預設啟動前端＋後端＋OCR 插件三群 | `scripts/start-all.bat` + `.sh` | Operator wants everything up in one command | Verified |
+| FR-4602 | OCR helper 可用 OCR_HELPER_BAT／OCR_HELPER_CMD 帶起 | start-all | Operator wants no manual helper start | Verified |
+| FR-4603 | 對 launcher 發 /launch/start 帶起 pstocr + ollama（idempotent） | start-all / PP-OCR launcher | Operator wants OCR engines ready | Verified |
+| FR-4604 | status 顯示 OCR helper 與各引擎狀態 | `scripts/status.bat` + `.sh` | Operator wants to see what is missing | Verified |
+| FR-4605 | stop-all 預設不動 OCR，STOP_OCR=1 才停 | `scripts/stop-all.bat` + `.sh` | Operator wants OCR shared with other tools | Verified |
+| NFR-4601 | .env 仍是唯一埠來源且未被修改；OCR 端點可選配覆寫 | 四支腳本 | Port conflict rule | Verified |
+| NFR-4602 | 後端／OCR 失敗只 WARNING，前端失敗才 exit 1 | start-all | Operator wants a reliable launcher | Verified |
+| NFR-4603 | SKIP_BACKEND / SKIP_OCR 可退出 | start-all | Operator wants control | Verified |
+| NFR-4604 | start-all idempotent（重跑不重啟已在跑的服務） | start-all | Operator wants safe re-runs | Verified |
+| AC-4601 | 實測 stop→start：15156/25156 皆起來、8199/7861/11434 保持、exit 0 | 手測 2026-09-21 | Operator wants everything started | Verified |
+

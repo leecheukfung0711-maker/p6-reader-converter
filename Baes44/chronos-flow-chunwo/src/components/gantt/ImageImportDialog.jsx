@@ -3,6 +3,10 @@ import { Button } from "@/components/ui/button";
 import { X, Upload, FileSpreadsheet, Download, CheckCircle, Loader2 } from "lucide-react";
 import { parseXER, parseXerTables } from "@/lib/parseXER";
 import { decodeTasksFromPDFInfo } from "@/lib/ganttPDFData";
+import { inferSectionLevels } from "@/lib/wbsLevel";
+import { TEXT_CHUNK_CONCURRENCY, looksLikeProgrammeText, mapWithConcurrency, mergeChunkTasks, planTextChunks, splitLongText } from "@/lib/textChunks";
+import LocalOcrSettings from "./LocalOcrSettings";
+import { buildRecoveryPrompt, comparePageCoverage, loadLocalOcrSettings, mergeRecoveredRows, readPageLocally } from "@/lib/localOcr";
 import * as XLSX from "xlsx";
 import { Trash2 } from "lucide-react";
 import { base44 } from "@/api/base44Client";
@@ -414,25 +418,45 @@ function parseExcelAllSheets(workbook) {
 }
 
 // ── AI-based Excel fallback ───────────────────────────────────
-async function parseExcelWithAI(workbook, sheetName, onProgress) {
+async function parseExcelWithAI(workbook, sheetName, onProgress, onCoverage) {
   onProgress("Rule-based parsing failed — using AI to analyse Excel structure...");
   const sheetNames = Array.isArray(sheetName) ? sheetName : [sheetName];
-  const text = sheetNames.map(s => `=== Sheet: ${s} ===\n` + sheetToTextForAI(workbook, s)).join("\n\n");
-  if (!text || text.length < 20) return [];
-  const extracted = await base44.integrations.Core.InvokeLLM({
-    prompt: `${GANTT_PROMPT_BASE}
+  // Batch 24: the sheets used to be concatenated and cut off at 20 000 characters,
+  // which silently dropped every later sheet. Each sheet is now split into
+  // line-aligned blocks and sent as its own batch, then merged in sheet order.
+  const units = [];
+  sheetNames.forEach((name, index) => {
+    const text = `=== Sheet: ${name} ===\n` + sheetToTextForAI(workbook, name);
+    if (text.trim().length < 20) return;
+    splitLongText(text).forEach((part, partIndex) => {
+      units.push({ page: index + 1, part: partIndex + 1, text: part });
+    });
+  });
+  if (!units.length) return [];
+  const chunks = planTextChunks(units, TEXT_CHUNK_MAX_CHARS, 1);
+  onProgress(`Analysing ${sheetNames.length} sheet(s) in ${chunks.length} batch(es)...`);
+  let done = 0;
+  const chunkTasks = await mapWithConcurrency(chunks, TEXT_CHUNK_CONCURRENCY, async (chunk) => {
+    const label = chunk.pages.length === 1 ? `sheet ${chunk.pages[0]}` : `sheets ${chunk.pages[0]}-${chunk.pages[chunk.pages.length - 1]}`;
+    const prompt = `${GANTT_PROMPT_BASE}
 
-The following is tab-separated data extracted from an Excel spreadsheet (sheets: ${sheetNames.join(", ")}).
+The following is tab-separated data extracted from an Excel spreadsheet (${label}${chunks.length > 1 ? `, batch ${chunks.indexOf(chunk) + 1} of ${chunks.length}` : ""}).
 Analyse the structure carefully: identify which columns represent activity names, IDs, start dates, end dates, and section headers.
 Columns may be in Chinese or English, or have non-standard names.
 Dates may be in various formats (e.g. DD/MM/YYYY, DD-Mon-YY, YYYY-MM-DD, Excel serial numbers).
 Rows without dates but with text that looks like a programme/section title should be is_section=true.
+Other batches are extracted separately — extract EVERY row in this batch, never summarise it.
 
 Excel content (tab-separated):
-${text.substring(0, 20000)}`,
-    response_json_schema: GANTT_TASK_SCHEMA,
+${chunk.text}`;
+    const extracted = await base44.integrations.Core.InvokeLLM({ prompt, response_json_schema: GANTT_TASK_SCHEMA });
+    done += 1;
+    onProgress(`Parsed ${label} (batch ${done}/${chunks.length})...`);
+    return aiResultToTasks(extracted?.tasks || []);
   });
-  return aiResultToTasks(extracted?.tasks || []);
+  const mergedTasks = mergeChunkTasks(chunkTasks);
+  onCoverage && onCoverage({ kind: "excel-batches", pages: sheetNames.length, batches: chunks.length, rows: mergedTasks.length });
+  return mergedTasks;
 }
 
 function parseP6Sheet(rows, headerRow, headers) {
@@ -923,9 +947,9 @@ async function renderPageAsBlob(pdfPage, rotation) {
 
 
 
-async function extractNativePDFText(pdf, pageNums) {
-  // Extract all pages in parallel
-  const pageTexts = await Promise.all(pageNums.map(async (pageNum) => {
+async function extractNativePDFTextByPage(pdf, pageNums) {
+  // Extract every page in parallel, keeping the page boundary (batch 24).
+  return Promise.all(pageNums.map(async (pageNum) => {
     const page = await pdf.getPage(pageNum);
     const content = await page.getTextContent();
     const byY = {};
@@ -935,11 +959,16 @@ async function extractNativePDFText(pdf, pageNums) {
       if (!byY[y]) byY[y] = [];
       byY[y].push({ x: item.transform[4], str: item.str });
     }
-    return Object.keys(byY).sort((a, b) => b - a)
+    const text = Object.keys(byY).sort((a, b) => b - a)
       .map(y => byY[y].sort((a, b) => a.x - b.x).map(i => i.str).join("  "))
       .join("\n");
+    return { page: pageNum, text };
   }));
-  return pageTexts.join("\n").trim();
+}
+
+async function extractNativePDFText(pdf, pageNums) {
+  const pages = await extractNativePDFTextByPage(pdf, pageNums);
+  return pages.map(p => p.text).join("\n").trim();
 }
 
 // ── AI schema for Gantt tasks ──────────────────────
@@ -1024,11 +1053,25 @@ const GANTT_VISION_TASK_SCHEMA = {
           float:             { type: "number" },
           pct:               { type: "number" },
           driving_path_flag: { type: "string" },
+          // ── Batch 23B (A/B-verified: 41 rows at 16, 17 and 18 fields) ──
+          // The WBS depth the chart itself shows, and the row colour it uses.
+          // `section_level` is only a *hint*: the deterministic numbering pass
+          // (src/lib/wbsLevel.js) always wins when the title carries a code.
+          section_level:     { type: "number" },
+          section_color:     { type: "string" },
         }
       }
     }
   }
 };
+
+/**
+ * Extra rules for the VISION calls only (scanned pages / images carry WBS bands
+ * the model can see). Verified on a real programme page: adding these two fields
+ * keeps the row count flat (41 rows at 16, 17 and 18 fields — see
+ * doc/requirements.md § 批次 23B 前期實測).
+ */
+const GANTT_VISION_PROMPT_SUFFIX = `\n\nWBS LEVELS — IMPORTANT (SECTION HEADERS ONLY):\n- Set section_level to the nesting depth visible on the chart: 1 = top programme band, 2 = a sub-band inside it, 3 = deeper, and so on.\n- Decide from, in this order: (a) the leading WBS numbering in the title ("1.0" -> 1, "1.1" -> 2, "1.1.1" -> 3), (b) the text indentation of the row, (c) the row's background colour band (darker / more saturated bands are usually the higher levels).\n- Also set section_color for EVERY section header: the background colour of that row as you actually see it (e.g. "light grey", "light blue", "#d9d9d9").\n- If you cannot tell, omit section_level / section_color — NEVER guess.`;
 
 const GANTT_PROMPT_BASE = `You are a Primavera P6 and Gantt chart expert. Extract ALL schedule/programme data from the provided content into a structured Gantt chart format.
 
@@ -1094,6 +1137,12 @@ function aiResultToTasks(aiTasks) {
     return {
       isSection: !!t.is_section,
       sectionType: t.section_type || "blue",
+      // ── Batch 23B: WBS level / colour seen by the vision model ──────────────
+      // Kept as a HINT: `inferSectionLevels()` prefers the deterministic WBS
+      // numbering from the title and only falls back to this value.
+      ...(t.section_level != null && !Number.isNaN(Number(t.section_level))
+        ? { aiSectionLevel: Number(t.section_level) } : {}),
+      ...(t.section_color ? { sectionColorName: String(t.section_color).trim() } : {}),
       activity: nullToEmpty(t.activity),
       activityId: nullToEmpty(t.activity_id),
       item: (t.item && String(t.item).toLowerCase() !== "null") ? t.item : undefined,
@@ -1134,7 +1183,33 @@ function aiResultToTasks(aiTasks) {
   }).filter(t => t.activity || t.activityId || t.start || t.end || t.lateStart || t.lateEnd || t.baselineStart || t.baselineFinish);
 }
 
-async function processPDF(file, onProgress) {
+/**
+ * Batch 25 — local OCR cross-check for one page.
+ *
+ * `localReadPromise` is started at the same time as the cloud call, so the page
+ * only waits for the slower of the two. When the local engine shows the cloud
+ * answer missed a large share of the page's activity IDs, the page is read again
+ * on its own (image + the local OCR text as a checklist) and the recovered rows
+ * are spliced back into that page's position.
+ */
+async function crossCheckPage({ rows, localReadPromise, fileUrl, pagePrompt, pageLabel, onProgress }) {
+  const localRead = await localReadPromise;
+  if (!localRead || !localRead.ids.length) return { rows, verdict: null, spliced: null, unavailable: true };
+  const verdict = comparePageCoverage(rows, localRead.ids);
+  onProgress && onProgress(`${pageLabel}: cloud ${rows.length} row(s) vs local ${verdict.localCount} id(s) — ${verdict.reason}`);
+  if (!verdict.needsRerun) return { rows, verdict, spliced: null, unavailable: false };
+  const retryTasks = await invokeVisionLLM({
+    prompt: `${pagePrompt}\n\n${buildRecoveryPrompt({ pageLabel, missingIds: verdict.missing, localText: localRead.text })}`,
+    file_urls: [fileUrl],
+    label: `${pageLabel} re-read`,
+    onProgress,
+  });
+  const spliced = mergeRecoveredRows(rows, aiResultToTasks(retryTasks));
+  onProgress && onProgress(`${pageLabel}: re-read recovered ${spliced.added} row(s), completed ${spliced.enriched} row(s)`);
+  return { rows: spliced.rows, verdict, spliced, unavailable: false };
+}
+
+async function processPDF(file, onProgress, onCoverage, ocrConfig) {
   onProgress("Reading PDF...");
   const pdfjsLib = await import("pdfjs-dist");
   pdfjsLib.GlobalWorkerOptions.workerSrc = `https://unpkg.com/pdfjs-dist@${pdfjsLib.version}/build/pdf.worker.min.mjs`;
@@ -1151,6 +1226,7 @@ async function processPDF(file, onProgress) {
     const parsed = await decodeTasksFromPDFInfo(info);
     if (parsed && parsed.length > 0) {
       onProgress(`✓ Embedded data found — ${parsed.length} records restored instantly!`);
+      onCoverage && onCoverage({ kind: "embedded", rows: parsed.length });
       return parsed;
     }
   } catch (_) {
@@ -1172,16 +1248,63 @@ async function processPDF(file, onProgress) {
   const hasStructuredText = nativeText.length > 200 && datePattern.test(nativeText);
 
   if (hasStructuredText) {
-    onProgress("Parsing text content with AI...");
-    const extracted = await base44.integrations.Core.InvokeLLM({
-      prompt: `${GANTT_PROMPT_BASE}\n\nFile: ${file.name}\n\nText content:\n${nativeText.substring(0, 24000)}`,
-      response_json_schema: GANTT_TASK_SCHEMA,
-      model: "gemini_3_1_pro",
+    // ── Batch 24: page-by-page text import ────────────────────────────────────
+    // The old single call sent only the first 24 000 characters of the document
+    // (measured on a 27-page print: 213 of 614 activity IDs = 35 %, so two thirds
+    // of the programme could never be imported, and which of the visible rows
+    // survived changed between runs). Every page is now planned into page-aligned
+    // batches, parsed one batch per call and merged in document order.
+    const pageTexts = await extractNativePDFTextByPage(pdf, schedulePageNums);
+    // A single page can exceed the batch budget (dense A3 prints); split it on line
+    // boundaries rather than dropping the tail.
+    const units = pageTexts.flatMap(p => splitLongText(p.text).map((text, k) => ({ page: p.page, part: k + 1, text })));
+    const chunks = planTextChunks(units);
+    onProgress(`Parsing text of ${totalPages} page(s) in ${chunks.length} batch(es)...`);
+    let done = 0;
+    const chunkTasks = await mapWithConcurrency(chunks, TEXT_CHUNK_CONCURRENCY, async (chunk) => {
+      const first = chunk.pages[0], last = chunk.pages[chunk.pages.length - 1];
+      const label = first === last ? `page ${first}` : `pages ${first}-${last}`;
+      const prompt = `${GANTT_PROMPT_BASE}\n\nThis is part ${chunks.indexOf(chunk) + 1} of ${chunks.length} of the file "${file.name}", ` +
+        `covering ${label} of ${totalPages}. Other parts are extracted separately — extract EVERY row that appears in this text, never summarise it.\n\n` +
+        `Text content:\n${chunk.text}`;
+      const call = () => base44.integrations.Core.InvokeLLM({
+        prompt, response_json_schema: GANTT_TASK_SCHEMA, model: "gemini_3_1_pro",
+      });
+      let extracted = await call();
+      let rows = extracted?.tasks || [];
+      // A schedule page must yield rows; retry once when an obviously tabular
+      // batch comes back empty (cover pages legitimately yield none).
+      if (rows.length === 0 && looksLikeProgrammeText(chunk.text)) {
+        onProgress(`${label}: no rows read — retrying once...`);
+        const retry = await call();
+        const retryRows = retry?.tasks || [];
+        if (retryRows.length > rows.length) { extracted = retry; rows = retryRows; }
+      }
+      done += 1;
+      onProgress(`Parsed ${label} (batch ${done}/${chunks.length}) — ${rows.length} row(s), ${totalPages} page(s) total...`);
+      return aiResultToTasks(rows);
     });
-    return aiResultToTasks(extracted.tasks || []);
+    const mergedTasks = mergeChunkTasks(chunkTasks);
+    const coverage = {
+      kind: "pdf-text",
+      pages: totalPages,
+      batches: chunks.length,
+      chars: pageTexts.reduce((sum, p) => sum + p.text.length, 0),
+      rows: mergedTasks.length,
+    };
+    onProgress(`✓ ${mergedTasks.length} row(s) parsed from all ${totalPages} page(s)`);
+    onCoverage && onCoverage(coverage);
+    return mergedTasks;
   }
 
   // Scanned PDF → full pipeline per page in parallel (render → upload → AI all concurrent)
+  // Batch 25: every page is also read by the LOCAL OCR engine at the same time; when
+  // that second opinion shows the cloud answer is short, the page is re-read on its own
+  // and the recovered rows are spliced back into that page's position.
+  const ocrEnabled = !!ocrConfig?.enabled;
+  const crossCheck = ocrEnabled
+    ? { engine: ocrConfig?.engine || "ppocr", pagesVerified: 0, pagesRerun: 0, rowsRecovered: 0, rowsCompleted: 0, unavailable: false }
+    : null;
   onProgress(`Processing ${schedulePageNums.length} page(s) in parallel...`);
   const allTaskArrays = await Promise.all(
     schedulePageNums.map(async (pageNum) => {
@@ -1192,30 +1315,101 @@ async function processPDF(file, onProgress) {
       // 2. Upload
       const imgFile = new File([blob], `p${pageNum}.jpg`, { type: "image/jpeg" });
       const { file_url } = await base44.integrations.Core.UploadFile({ file: imgFile });
-      // 3. AI analyse
-      const extracted = await base44.integrations.Core.InvokeLLM({
-        prompt: `${GANTT_PROMPT_BASE}\n\nThis is page ${pageNum} of ${totalPages} from file: ${file.name}.\nThe image has been pre-rotated to the correct reading orientation — read left-to-right, top-to-bottom.`,
-        file_urls: [file_url],
-        response_json_schema: GANTT_VISION_TASK_SCHEMA,
-        model: "gemini_3_1_pro",
+      // 3. Cloud vision + local OCR at the same time
+      const pagePrompt = `${GANTT_PROMPT_BASE}${GANTT_VISION_PROMPT_SUFFIX}\n\nThis is page ${pageNum} of ${totalPages} from file: ${file.name}.\nThe image has been pre-rotated to the correct reading orientation — read left-to-right, top-to-bottom.`;
+      const localReadPromise = ocrEnabled ? readPageLocally(blob, ocrConfig) : Promise.resolve(null);
+      const pageTasks = await invokeVisionLLM({
+        prompt: pagePrompt, file_urls: [file_url], label: `Page ${pageNum} of ${totalPages}`, onProgress,
       });
-      return aiResultToTasks(extracted.tasks || []);
+
+      // 4. Cross-check and, when the page is clearly short, read it again on its own
+      const checked = await crossCheckPage({
+        rows: aiResultToTasks(pageTasks),
+        localReadPromise,
+        fileUrl: file_url,
+        pagePrompt,
+        pageLabel: `Page ${pageNum}/${totalPages}`,
+        onProgress,
+      });
+      if (crossCheck) {
+        if (checked.unavailable) crossCheck.unavailable = true;
+        else crossCheck.pagesVerified += 1;
+        if (checked.spliced) {
+          crossCheck.pagesRerun += 1;
+          crossCheck.rowsRecovered += checked.spliced.added;
+          crossCheck.rowsCompleted += checked.spliced.enriched;
+        }
+      }
+      return checked.rows;
     })
   );
-  return allTaskArrays.flat();
+  const visionTasks = allTaskArrays.flat();
+  onProgress(`✓ ${visionTasks.length} row(s) read from ${schedulePageNums.length} scanned page(s)`);
+  onCoverage && onCoverage({
+    kind: "vision", pages: schedulePageNums.length, batches: schedulePageNums.length, rows: visionTasks.length, crossCheck,
+  });
+  return visionTasks;
 }
 
-async function processImage(file, onProgress) {
-  onProgress("Uploading image...");
-  const uploadResult = await base44.integrations.Core.UploadFile({ file });
-  onProgress("Analysing with AI Vision...");
-  const extracted = await base44.integrations.Core.InvokeLLM({
-    prompt: `${GANTT_PROMPT_BASE}\n\nFile: ${file.name}`,
-    file_urls: [uploadResult.file_url],
+/**
+ * Batch 23B — a vision page occasionally comes back almost empty: on a real
+ * programme page one run returned **1 row in 4.4 s** where the same page and
+ * prompt returned 41 rows in ~60 s on three other runs. A one-row answer for a
+ * programme page is a failed read, not a thin page, so ask once more and keep
+ * the bigger answer.
+ */
+const VISION_MIN_ROWS = 2;
+async function invokeVisionLLM({ prompt, file_urls, label, onProgress }) {
+  const call = () => base44.integrations.Core.InvokeLLM({
+    prompt,
+    file_urls,
     response_json_schema: GANTT_VISION_TASK_SCHEMA,
     model: "gemini_3_1_pro",
   });
-  return aiResultToTasks(extracted.tasks || []);
+  let extracted = await call();
+  let tasks = extracted?.tasks || [];
+  if (tasks.length < VISION_MIN_ROWS) {
+    onProgress && onProgress(`${label}: only ${tasks.length} row(s) read — retrying once...`);
+    const retry = await call();
+    const retryTasks = retry?.tasks || [];
+    if (retryTasks.length > tasks.length) { extracted = retry; tasks = retryTasks; }
+  }
+  return tasks;
+}
+
+async function processImage(file, onProgress, onCoverage, ocrConfig) {
+  onProgress("Uploading image...");
+  const uploadResult = await base44.integrations.Core.UploadFile({ file });
+  onProgress("Analysing with AI Vision...");
+  // Retries once if the model comes back almost empty (batch 23B guard).
+  const pagePrompt = `${GANTT_PROMPT_BASE}${GANTT_VISION_PROMPT_SUFFIX}\n\nFile: ${file.name}`;
+  const localReadPromise = ocrConfig?.enabled ? readPageLocally(file, ocrConfig) : Promise.resolve(null);
+  const imgTasks = await invokeVisionLLM({
+    prompt: pagePrompt,
+    file_urls: [uploadResult.file_url],
+    label: file.name,
+    onProgress,
+  });
+  const checked = await crossCheckPage({
+    rows: aiResultToTasks(imgTasks),
+    localReadPromise,
+    fileUrl: uploadResult.file_url,
+    pagePrompt,
+    pageLabel: file.name,
+    onProgress,
+  });
+  const crossCheck = ocrConfig?.enabled
+    ? {
+        engine: ocrConfig?.engine || "ppocr",
+        pagesVerified: checked.unavailable ? 0 : 1,
+        pagesRerun: checked.spliced ? 1 : 0,
+        rowsRecovered: checked.spliced?.added || 0,
+        rowsCompleted: checked.spliced?.enriched || 0,
+        unavailable: checked.unavailable,
+      }
+    : null;
+  onCoverage && onCoverage({ kind: "vision-image", pages: 1, batches: 1, rows: checked.rows.length, crossCheck });
+  return checked.rows;
 }
 
 // ── Editable preview table ────────────────────────────────────
@@ -1309,9 +1503,17 @@ export default function ImageImportDialog({ onImport, onClose, initialFile, onSe
   // Raw tables of an imported XER — kept so exporting back to XER is lossless
   // (see buildXERPassThrough). Passed to the page with the parsed tasks.
   const [xerSource, setXerSource] = useState(null);
+  // Batch 24: how much of the source file actually reached the model (pages,
+  // batches, characters, rows) — shown in the import report so missing content
+  // is visible instead of silent.
+  const [importCoverage, setImportCoverage] = useState(null);
   const [sourceFileName, setSourceFileName] = useState("");
   const xerFileRef = useRef();
   const excelFileRef = useRef();
+
+  // Batch 25: the local OCR cross-check settings live in localStorage and are edited
+  // through <LocalOcrSettings /> (here and in Global Settings → Other). They are read
+  // fresh at import time, so a change made in either place always applies.
 
   // Auto-process a file dropped from the empty-state zone
   useEffect(() => {
@@ -1375,8 +1577,8 @@ export default function ImageImportDialog({ onImport, onClose, initialFile, onSe
     if (!f) return;
     setSourceFileName(f.name.replace(/\.[^.]+$/, "")); // strip extension
     setParsedFileType("PDF");
-    setMode("pdf"); setStatus("loading"); setParsedTasks(null);
-    const tasks = await processPDF(f, (label) => setProgressLabel(label));
+    setMode("pdf"); setStatus("loading"); setParsedTasks(null); setImportCoverage(null);
+    const tasks = await processPDF(f, (label) => setProgressLabel(label), setImportCoverage, loadLocalOcrSettings());
     if (!tasks || tasks.length === 0) { setStatus("error"); return; }
     setParsedTasks(tasks); setStatus("done");
   }, []);
@@ -1385,8 +1587,8 @@ export default function ImageImportDialog({ onImport, onClose, initialFile, onSe
     if (!f) return;
     setSourceFileName(f.name.replace(/\.[^.]+$/, "")); // strip extension
     setParsedFileType("Image");
-    setMode("image"); setStatus("loading"); setProgressLabel("Uploading image..."); setParsedTasks(null);
-    const tasks = await processImage(f, (label) => setProgressLabel(label));
+    setMode("image"); setStatus("loading"); setProgressLabel("Uploading image..."); setParsedTasks(null); setImportCoverage(null);
+    const tasks = await processImage(f, (label) => setProgressLabel(label), setImportCoverage, loadLocalOcrSettings());
     if (!tasks || tasks.length === 0) { setStatus("error"); return; }
     setParsedTasks(tasks); setStatus("done");
   }, []);
@@ -1420,14 +1622,14 @@ export default function ImageImportDialog({ onImport, onClose, initialFile, onSe
 
   const handleExcelParse = async () => {
     if (!excelInfo) return;
-    setStatus("loading"); setProgressLabel("Parsing Excel...");
+    setStatus("loading"); setProgressLabel("Parsing Excel..."); setImportCoverage(null);
     // Yield to UI before heavy synchronous work
     await new Promise(r => setTimeout(r, 0));
     // Default: parse ALL sheets and combine their content
     let tasks = parseExcelAllSheets(excelInfo.workbook);
     // If rule-based parser returns nothing or very few results, fall back to AI on all sheets
     if (tasks.length < 2) {
-      tasks = await parseExcelWithAI(excelInfo.workbook, excelInfo.sheets, (label) => setProgressLabel(label));
+      tasks = await parseExcelWithAI(excelInfo.workbook, excelInfo.sheets, (label) => setProgressLabel(label), setImportCoverage);
     }
     if (!tasks || tasks.length === 0) { setStatus("error"); return; }
     setParsedTasks(tasks); setStatus("done");
@@ -1435,7 +1637,13 @@ export default function ImageImportDialog({ onImport, onClose, initialFile, onSe
 
   const handleImport = () => {
     if (parsedTasks) {
-      onImport(parsedTasks, importMode, parsedFileType, xerSource);
+      // ── Batch 23C: fill in WBS levels from the section numbering ──────────
+      // Excel / PDF / scanned-OCR imports used to create every section at
+      // Level 1 (the hierarchy only ever came from the XER PROJWBS table), so a
+      // whole programme looked flat. `inferSectionLevels` only ever *fills in*
+      // missing levels — XER levels are authoritative and are never overwritten.
+      const { tasks: levelledTasks, stats: wbsLevelStats } = inferSectionLevels(parsedTasks);
+      onImport(levelledTasks, importMode, parsedFileType, xerSource, { wbsLevels: wbsLevelStats, coverage: importCoverage });
       // Set project title from source filename
       if (onSetProjectTitle && sourceFileName) {
         onSetProjectTitle(sourceFileName);
@@ -1619,6 +1827,13 @@ export default function ImageImportDialog({ onImport, onClose, initialFile, onSe
           ) : (
             <span className="text-xs text-text-muted italic">Upload a file to get started</span>
           )}
+        </div>
+
+        {/* Batch 25: local OCR cross-check — reads every scanned page a second time on
+            this machine and re-reads any page whose cloud answer is clearly short.
+            The same controls also live in Global Settings → Other. */}
+        <div className="mt-3 pt-3 border-t border-border">
+          <LocalOcrSettings />
         </div>
       </div>
     </div>

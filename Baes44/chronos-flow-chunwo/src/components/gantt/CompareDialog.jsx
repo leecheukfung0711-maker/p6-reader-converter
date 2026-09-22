@@ -192,7 +192,8 @@ IF it IS a Duration Change Table:
 IF it is NOT a Duration Change Table (it's a regular Gantt/schedule):
 - Set is_duration_change_table=false
 - Extract ALL schedule/programme data: SECTION HEADERS (is_section=true, activity=title, no start/end) and ACTIVITY ROWS (is_section=false, activity_id, start, end in YYYY-MM-DD format, bar_type="delay" or "baseline").
-- ACTUAL DATE HANDLING: If dates are marked as Actual ("A" suffix, red text, or "Actual Start"/"Actual Finish" columns), put them in start/end AND set start_actual=true / end_actual=true. If both planned and actual exist, use actual as start/end and put planned in baseline_start/baseline_finish. Strip any "A" letter suffix from dates.`,
+- ACTUAL DATE HANDLING: If dates are marked as Actual ("A" suffix, red text, or "Actual Start"/"Actual Finish" columns), put them in start/end AND set start_actual=true / end_actual=true. If both planned and actual exist, use actual as start/end and put planned in baseline_start/baseline_finish. Strip any "A" letter suffix from dates.
+- WBS LEVELS (SECTION HEADERS only): set section_level to the nesting depth you can see (1 = top programme band, 2 = a sub-band, 3 = deeper ...), using in this order the leading WBS numbering in the title, the text indentation and the row background colour band. Also set section_color to the row's background colour as you actually see it. Omit either when unclear — never guess.`,
         file_urls: [uploadResult.file_url],
         response_json_schema: {
           type: "object",
@@ -215,6 +216,8 @@ IF it is NOT a Duration Change Table (it's a regular Gantt/schedule):
                   baseline_start: { type: "string" },
                   baseline_finish: { type: "string" },
                   bar_type: { type: "string" },
+                  section_level: { type: "number" },
+                  section_color: { type: "string" },
                   new_duration: { type: "number" },
                   duration_unit: { type: "string" },
                 }
@@ -237,6 +240,9 @@ IF it is NOT a Duration Change Table (it's a regular Gantt/schedule):
         parsed = (extracted?.tasks || []).map(t => ({
           isSection: !!t.is_section,
           sectionType: t.section_type || "blue",
+          ...(t.section_level != null && !Number.isNaN(Number(t.section_level))
+            ? { aiSectionLevel: Number(t.section_level) } : {}),
+          ...(t.section_color ? { sectionColorName: String(t.section_color).trim() } : {}),
           activity: t.activity || "",
           activityId: t.activity_id || "",
           item: t.item || undefined,

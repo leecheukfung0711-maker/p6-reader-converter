@@ -129,6 +129,12 @@ export default function WbsSettingsPanel({ displaySettings, onChange, embedded =
               checked={wbs.groupHeadersOnGantt !== false} onChange={(v) => setWbs({ groupHeadersOnGantt: v })}
               title="Draw the WBS row label inside the timeline area" />
           </div>
+          {/* Batch 23A: level indentation (12px per level) — off keeps the pre-23 look */}
+          <div className="flex items-center justify-between mb-2">
+            <Switch id="wbs-indent-by-level-toggle" label="Indent by WBS Level"
+              checked={wbs.indentByLevel !== false} onChange={(v) => setWbs({ indentByLevel: v })}
+              title="Indent every WBS row one step (12px) per level, so a deeper level is visible even when colours are similar. Levels can be changed from the row right-click menu." />
+          </div>
 
           {/* ── Customise Grouping (reference: Group By | To Level | Status) ── */}
           <div className="border-t border-border pt-3 mt-3">

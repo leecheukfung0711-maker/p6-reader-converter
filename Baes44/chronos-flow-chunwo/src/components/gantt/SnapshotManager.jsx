@@ -126,7 +126,7 @@ export default function SnapshotManager({ tasks, columnVisibility, cw, onRestore
                   className="flex items-center gap-2 px-4 py-2.5 hover:bg-surface-subtle border-b border-border last:border-0"
                 >
                   <div className="flex-1 min-w-0">
-                    <div className="text-sm font-medium text-text truncate">{snap.name}</div>
+                    <div className="text-sm font-medium text-text break-words">{snap.name}</div>
                     <div className="flex items-center gap-1 text-xs text-text-muted mt-0.5">
                       <Clock size={10} />
                       {new Date(snap.savedAt).toLocaleString("en-GB", { hour12: false })}

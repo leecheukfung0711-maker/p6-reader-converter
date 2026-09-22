@@ -192,10 +192,10 @@ function RelCard({ title, rows, showDriving, height, onJump }) {
                 className={`${i % 2 === 0 ? "bg-surface" : ""} hover:bg-surface-subtle transition-colors duration-150 cursor-pointer`}
               >
                 <td className="px-2 py-1 text-[10px] text-text font-medium border-r border-border align-middle" title={r.code} style={{ width: 80 }}>
-                  <div className="truncate" style={{ maxWidth: 64 }}>{r.code || "—"}</div>
+                  <div className="break-words">{r.code || "—"}</div>
                 </td>
                 <td className="px-2 py-1 text-[10px] text-text-muted border-r border-border align-middle" title={r.name} style={{ width: 200 }}>
-                  <div className="truncate" style={{ maxWidth: 184 }}>{r.name || "—"}</div>
+                  <div className="break-words">{r.name || "—"}</div>
                 </td>
                 <td className="px-2 py-1 text-[10px] text-text whitespace-nowrap border-r border-border text-center align-middle" title={REL_NAMES[r.type]} style={{ width: 60 }}>
                   {r.type}
@@ -589,7 +589,7 @@ export default function GanttInfoPanel({
       {/* Header + body */}
       <div className="flex-grow flex flex-col overflow-hidden min-w-0">
         <header className="flex justify-between items-center p-4 border-b border-border shrink-0 bg-surface-muted">
-          <h2 id="gantt-information-panel-title" className="text-base font-semibold text-text truncate">
+          <h2 id="gantt-information-panel-title" className="text-base font-semibold text-text min-w-0 break-words">
             {active.label}
             {task && <span className="ml-2 text-xs font-normal text-text-muted">{task.activityId}</span>}
           </h2>

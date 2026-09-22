@@ -14,7 +14,8 @@
 const API_BASE = "/local-api";
 
 export const BACKEND_HINT =
-  "本地後端未啟動 — 請執行 scripts\\start-backend.bat（或 set START_BACKEND=1 後跑 scripts\\start-all.bat）";
+  "本地後端未啟動 — 請在工作區根目錄（P6 Reader & Converter）執行 scripts\\start-backend.bat，" +
+  "或先 set START_BACKEND=1 再跑 scripts\\start-all.bat（此後端只用於「選擇專案／存檔」）";
 
 async function request(path, options = {}) {
   let res;

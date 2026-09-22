@@ -25,6 +25,7 @@ import { resolveImportedLinks } from "@/lib/buildRelationshipMap";
 import ProjectBar from "@/components/gantt/ProjectBar";
 import QuickFilterMenu from "@/components/gantt/QuickFilterMenu";
 import { applyQuickFilters, defaultQuickFilters, normalizeRecalcDate, recalcDateFromXerTables } from "@/lib/quickFilters";
+import { inferSectionLevels } from "@/lib/wbsLevel";
 
 const MIN_TABLE_W = 280;
 const MAX_TABLE_W = 1400;
@@ -315,6 +316,12 @@ export default function GanttPage() {
 
   const [viewMode, setViewMode] = useState("month");
   const [showToday, setShowToday] = useState(true);
+  // Batch 44 — holiday markers are their own switch and default to OFF (they used to ride
+  // on the Today line, which made "off" also hide the today line).
+  const [showHolidays, setShowHolidays] = useState(false);
+  // Batch 27 — Last Recalc Date line on the chart (the programme's data date).
+  // Toggleable in Other Settings ▸ Display; drawn only once a date exists.
+  const [showRecalcLine, setShowRecalcLine] = useState(true);
   const [projectTitle, setProjectTitle] = useState("Project Gantt Chart");
   // Active project in the LOCAL backend (project + version storage) — see ProjectBar.
   const [currentProjectId, setCurrentProjectId] = useState(null);
@@ -583,10 +590,17 @@ export default function GanttPage() {
       setCurrentProjectId(null);
     }
     if (payload && Array.isArray(payload.tasks)) {
-      const resolvedTasks = resolveImportedLinks(payload.tasks);
+      // Batch 23C: a programme stored by the local backend (Excel/PDF import
+      // path) may have flat sections — fill levels in from the numbering too.
+      const { tasks: levelled } = inferSectionLevels(payload.tasks);
+      const resolvedTasks = resolveImportedLinks(levelled);
       saveToHistory(tasks);
       if (xerTables) setXerSource(xerTables);
       setTasks(resolvedTasks);
+      // Batch 27: the stored version carries the programme's Last Recalc Date,
+      // so the data date comes back with the programme (XER value as a fallback).
+      const savedRecalc = normalizeRecalcDate(payload?.meta?.last_recalc_date);
+      setLastRecalcDate(savedRecalc || recalcDateFromXerTables(xerTables));
       setNextId(getNextId(resolvedTasks) + 1);
       setSelectedIds(new Set());
     }
@@ -596,14 +610,29 @@ export default function GanttPage() {
   // These lived in the header "Display" dropdown before; the panel's "Other"
   // tab renders them now. Grid-line toggles / date format are in the panel's
   // "Timeline & Grid" tab (GanttSettingsPanel), so they are not duplicated.
+  // Batch 36/37 — this flag drives the comparison ARROWS drawn between adjacent
+  // programmes (and the comparison-programme groupings), *not* the comparison bars: those
+  // are drawn whenever the compared dates differ, on screen and on paper alike. The label
+  // used to read "Compare Bars", which made the Print Preview's own "Comparison bars"
+  // switch look like the same setting.
+  const comparisonBarsOn = tasks.some(t => t.isSection && t.showComparison !== false);
+  const handleSetComparisonBars = useCallback((on) => {
+    setTasks(p => p.map(t => t.isSection ? { ...t, showComparison: !!on } : t));
+  }, []);
+
   const displayToggles = [
-    { label: "Holiday Markers", on: showToday, toggle: () => setShowToday(v => !v) },
+    // Batch 44 — two separate switches: holiday shading (default OFF) and the today line.
+    { label: "Holiday Markers", hint: "Shade HK public holidays in the timeline (off by default)", on: showHolidays, toggle: () => setShowHolidays(v => !v) },
+    { label: "Today Line", hint: "Red vertical line at today's date", on: showToday, toggle: () => setShowToday(v => !v) },
     { label: "Staircase Line", on: showStaircase, toggle: () => setShowStaircase(v => !v) },
     { label: "Relationship Lines", on: showRelationshipLines, toggle: () => setShowRelationshipLines(v => !v) },
-    { label: "Compare Bars", on: tasks.some(t => t.isSection && t.showComparison !== false), toggle: () => {
-      const anyOn = tasks.some(t => t.isSection && t.showComparison !== false);
-      setTasks(p => p.map(t => t.isSection ? { ...t, showComparison: !anyOn } : t));
-    }},
+    // Batch 27 — the programme's data date, drawn as a dashed orange line.
+    // Right-click any date column (or a row) to set it.
+    { label: "Last Recalc Date line", on: showRecalcLine, toggle: () => setShowRecalcLine(v => !v) },
+    // Batch 37 — renamed from "Compare Bars": this switch toggles the comparison arrows
+    // between the current and comparison programmes, not the comparison bars (see the note
+    // above). The Print Preview's own "Comparison bars" option is a separate setting.
+    { label: "Comparison Arrows", hint: "Arrows between the current and comparison programmes — the comparison bars themselves follow the compared dates", on: comparisonBarsOn, toggle: () => handleSetComparisonBars(!comparisonBarsOn) },
     { label: "Diff Only", on: showOnlyDiff, toggle: () => setShowOnlyDiff(v => !v) },
     { label: "Relation Filter", on: showRelationFilter, toggle: () => setShowRelationFilter(v => !v) },
   ];
@@ -680,6 +709,7 @@ export default function GanttPage() {
           <ProjectBar
             currentProjectId={currentProjectId}
             tasks={tasks}
+            lastRecalcDate={lastRecalcDate}
             onProjectLoaded={handleProjectLoaded}
           />
         </div>
@@ -917,6 +947,7 @@ export default function GanttPage() {
         setDurMode={setDurMode}
         viewMode={viewMode}
         showToday={showToday}
+      showHolidays={showHolidays}
         labelOffsets={labelOffsets}
         setLabelOffsets={setLabelOffsets}
         tableWidth={tableWidth}
@@ -929,6 +960,10 @@ export default function GanttPage() {
         onDropImport={(file) => { setImportInitialFile(file); setShowImageImport(true); }}
         showStaircase={showStaircase}
         showRelationshipLines={showRelationshipLines}
+        showRecalcLine={showRecalcLine}
+        recalcDate={lastRecalcDate}
+        fileRecalcDate={recalcDateFromXerTables(xerSource)}
+        onRecalcDateChange={handleRecalcDateChange}
         staircaseFilter={staircaseFilter}
         onStaircaseFilterChange={setStaircaseFilter}
         onFiltersLoaded={setGanttFilters}
@@ -968,6 +1003,9 @@ export default function GanttPage() {
           displaySettings={displaySettings}
           onDisplaySettingsChange={setDisplaySettings}
           xerSource={xerSource}
+          recalcDate={lastRecalcDate}
+          staircaseFilterIds={staircaseFilter}
+          onToggleComparisonBars={handleSetComparisonBars}
           onClose={() => setShowExport(false)}
           onOpenXerMapping={() => { setShowExport(false); setShowXerMapping(true); }}
         />
@@ -1007,7 +1045,9 @@ export default function GanttPage() {
           initialFile={importInitialFile}
           onClose={() => { setShowImageImport(false); setImportInitialFile(null); }}
           onSetProjectTitle={(fileName) => setProjectTitle(fileName)}
-          onImport={(rawTasks, importMode, fileType, xerTables) => {
+          onImport={(rawTasks, importMode, fileType, xerTables, meta) => {
+            const wbsLevelStats = meta?.wbsLevels;
+            const coverage = meta?.coverage;
             if (xerTables) setXerSource(xerTables);   // enables lossless XER → XER export
             saveToHistory(tasks);
             if (importMode === "set_baseline") {
@@ -1158,6 +1198,8 @@ export default function GanttPage() {
                   { key: "baselineFinish",label: "BL End",             critical: false, filled: blKeys.length,            total: nonSectionRaw.length, pct: Math.round(blKeys.length / Math.max(1, nonSectionRaw.length) * 100) },
                 ],
                 timestamp: new Date(),
+                wbsLevels: wbsLevelStats,
+                coverage,
                 matchedCount,
               });
               return;
@@ -1266,7 +1308,7 @@ export default function GanttPage() {
               });
             }
             // Generate import status report
-            setImportReport(buildImportReport(rawTasks, fileType || "File"));
+            setImportReport({ ...buildImportReport(rawTasks, fileType || "File"), wbsLevels: wbsLevelStats, coverage });
           }}
         />
       )}
@@ -1279,7 +1321,7 @@ export default function GanttPage() {
           onReplaceWithVersionA={(parsed) => {
             // Replace all tasks with Version A data — dates stored as BL (Baseline) dates
             saveToHistory(tasks);
-            const newTasks = parsed.map((t, idx) => ({
+            const mappedTasks = parsed.map((t, idx) => ({
               ...t,
               id: idx + 1,
               activityId: t.activityId || "",
@@ -1293,6 +1335,9 @@ export default function GanttPage() {
               ...(t.item ? { customItem: t.item } : {}),
               ...(t.isSection ? { isSection: true, sectionType: t.sectionType || "blue" } : {}),
             }));
+            // Batch 23C/23B: Version A often comes from a scan — derive WBS levels
+            // from the section numbering (or the vision hint) before displaying.
+            const { tasks: newTasks } = inferSectionLevels(mappedTasks);
             setTasks(newTasks);
             setNextId(getNextId(newTasks));
             setSelectedIds(new Set());
@@ -1312,8 +1357,10 @@ export default function GanttPage() {
               const maxId = Math.max(0, ...updated.map(t => t.id));
               const newTasksWithIds = newTasks.map((t, i) => ({ ...t, id: maxId + i + 1 }));
               const result = [...updated, ...newTasksWithIds];
-              setNextId(getNextId(result));
-              return result;
+              // Batch 23C/23B: sections arriving from Version B get their levels too
+              const { tasks: levelled } = inferSectionLevels(result);
+              setNextId(getNextId(levelled));
+              return levelled;
             });
             setSelectedIds(new Set());
             // Show BL date columns (Version A = Baseline) and Actual date columns (Version B = current start/end)

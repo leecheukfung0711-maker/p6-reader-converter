@@ -24,10 +24,12 @@ import { parseExcelFile, parseXERFile, parseXMLFile } from "@/components/gantt/I
  *   currentProjectId — active project (or null)
  *   onProjectLoaded  — (project, payload, xerTables) => void  (load into editor)
  *   tasks            — current editor tasks (used by the save button)
+ *   lastRecalcDate   — the programme's data date (batch 27); stored in the
+ *                      version payload so it comes back with the programme
  */
 const SERVER_PARSE_ON_UPLOAD = false;
 
-export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks }) {
+export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks, lastRecalcDate = "" }) {
   const [projects, setProjects] = useState([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -136,7 +138,11 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks })
         if (!parsedTasks.length) throw new Error("檔案中找不到任何 activity。");
         const payload = {
           tasks: parsedTasks,
-          meta: { source_filename: file.name, source_format: format, import_source: "client" },
+          meta: {
+            source_filename: file.name, source_format: format, import_source: "client",
+            // Batch 27: keep the programme's data date with the version.
+            ...(lastRecalcDate ? { last_recalc_date: lastRecalcDate } : {}),
+          },
         };
         const version = await localApi.createVersion(
           currentProjectId,
@@ -166,7 +172,14 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks })
     try {
       await localApi.createVersion(
         currentProjectId,
-        { tasks: tasks || [], meta: { import_source: "client" } },
+        {
+          tasks: tasks || [],
+          meta: {
+            import_source: "client",
+            // Batch 27: the data date travels with the stored programme.
+            ...(lastRecalcDate ? { last_recalc_date: lastRecalcDate } : {}),
+          },
+        },
         `Save ${new Date().toLocaleString()}`,
         false
       );
@@ -191,7 +204,7 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks })
         title="專案管理"
       >
         <FolderOpen size={13} />
-        <span className="max-w-[140px] truncate">{current?.name || "選擇專案"}</span>
+        <span className="max-w-[220px] truncate" title={current?.name || "選擇專案"}>{current?.name || "選擇專案"}</span>
         <RefreshCw size={11} className={loading ? "animate-spin" : "opacity-50"} />
       </button>
 
@@ -243,7 +256,7 @@ export default function ProjectBar({ currentProjectId, onProjectLoaded, tasks })
                     p.id === currentProjectId ? "text-primary bg-surface-subtle" : "text-text"
                   }`}
                 >
-                  <span className="block truncate">{p.name}</span>
+                  <span className="block break-words">{p.name}</span>
                   <span className="block text-[10px] text-text-muted">
                     {p.source_format || "—"} · {p.version_count} 版本
                   </span>

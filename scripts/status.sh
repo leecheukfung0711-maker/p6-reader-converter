@@ -3,8 +3,9 @@
 # Service status for "P6 Reader & Converter" - macOS / Linux.
 #
 #   * Ports come from the workspace root .env only.
-#   * Reports the app dev server, the optional local FastAPI scaffold, the
-#     SQLite file and the Base44 cloud API the app actually calls.
+#   * Reports the app dev server, the local FastAPI backend, the local OCR
+#     plugin (PP-OCR helper + the engines it can launch), the SQLite file and
+#     the Base44 cloud API the app actually calls.
 #
 # Usage:  bash scripts/status.sh
 # ---------------------------------------------------------------------------
@@ -28,6 +29,7 @@ http_code() {
 
 FRONTEND_PORT="$(read_env FRONTEND_PORT "")"
 BACKEND_PORT="$(read_env BACKEND_PORT "")"
+OCR_LAUNCHER_URL="$(read_env OCR_LAUNCHER_URL "http://127.0.0.1:8199")"
 
 echo "========================================"
 echo "  Service Status - P6 Reader & Converter"
@@ -52,7 +54,24 @@ elif [ "$(http_code "http://localhost:$BACKEND_PORT/health")" = "200" ]; then
   echo "Status: RUNNING  (health OK)"
 else
   echo "Status: STOPPED or not responding"
-  echo "Note: optional - the app uses the Base44 cloud API instead."
+  echo "Start it with: bash scripts/start-all.sh (or bash scripts/start-backend.sh)"
+fi
+
+echo
+echo "--- Local OCR plugin (PP-OCR helper + engines) ---"
+LAUNCHER_JSON="$(curl -s --max-time 5 "$OCR_LAUNCHER_URL/launch/services" 2>/dev/null || true)"
+if ! printf '%s' "$LAUNCHER_JSON" | grep -q "launcher"; then
+  echo "Status: helper NOT running ($OCR_LAUNCHER_URL)"
+  echo "Start it with: bash scripts/start-all.sh (set OCR_HELPER_CMD)"
+else
+  echo "Status: helper RUNNING ($OCR_LAUNCHER_URL)"
+  for engine in pstocr ollama; do
+    if printf '%s' "$LAUNCHER_JSON" | grep -q "\"id\": \"$engine\"[^}]*\"running\": true"; then
+      echo "  engine $engine: running"
+    else
+      echo "  engine $engine: stopped - the app starts it on demand"
+    fi
+  done
 fi
 
 echo

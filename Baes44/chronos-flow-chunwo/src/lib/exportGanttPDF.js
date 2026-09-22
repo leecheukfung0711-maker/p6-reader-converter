@@ -1,13 +1,18 @@
 import { jsPDF } from "jspdf";
 import { parseISO, isValid, differenceInDays, addDays, addMonths, startOfMonth, format, eachMonthOfInterval } from "date-fns";
-import { countWorkingDays } from "@/lib/hkWorkingDays";
+import { countWorkingDays, getHolidaysInRange } from "@/lib/hkWorkingDays";
 import {
   DEFAULT_DISPLAY_SETTINGS,
   formatDisplayDate,
   pdfDashPattern,
   hexToRgbArray,
   resolveWbsRowStyle,
+  buildBarTextParts,
+  hasBarInfo,
+  normalizeBarTextPosition,
+  pdfCoreFontFor,
 } from "@/lib/displaySettings";
+import { encodeTasksForPDF } from "@/lib/ganttPDFData";
 
 const BAR_COLOR = [41, 128, 185];
 const DELAY_COLOR = [34, 197, 94];
@@ -16,16 +21,74 @@ const GRID_LINE = [200, 200, 200];
 const TEXT_DARK = [30, 30, 30];
 const ROW_ALT = [248, 250, 252];
 const RED = [239, 68, 68];
+// The chart's comparison colour (BL/late bars, comparison milestones and the
+// comparison-arrow annotation are all #733208 there — batch 36/39).
+const COMPARISON_BROWN = [115, 50, 8];
+
+/**
+ * Batch 38/39 — collects the printed staircase's steps **exactly like the chart does**
+ * (`UnifiedGanttLayout` ▸ `bpMap` + `staircases` + the `<polyline>`):
+ *
+ *   · one group per section, plus a leading group for rows that come before the first
+ *     section (the chart pushes those too),
+ *   · every non-section row that has a position takes part — bars *and milestones*
+ *     (the chart's `bpMap` gives a milestone `bpos(start, start)`: one day wide),
+ *   · rows without a position are skipped, and `filterIds` mirrors the BulkEditBar
+ *     "Staircase filter" (only the selected rows take part),
+ *   · steps keep their page so the line can continue over a page break.
+ *
+ * Each group also carries what the chart's comparison arrows need (batch 39):
+ * `showComparison` (the programmes that may be compared), `sectionIdx` (the row the arrow
+ * is drawn on) and, per step, `finish` (the chart's `ged`: latest `end`, else `start`).
+ *
+ * Exported so the smoke test can pin the rule down without rendering a PDF.
+ */
+export function collectStaircaseSteps(tasks, positionOf, filterIds = null) {
+  const programmes = [];
+  let current = null;
+  const open = () => {
+    if (!current) {
+      // Rows before the first section: the chart starts such a group "comparable" too.
+      current = { steps: [], showComparison: true, sectionIdx: null };
+      programmes.push(current);
+    }
+    return current;
+  };
+  (tasks || []).forEach((task, idx) => {
+    if (task && task.isSection) {
+      current = { steps: [], showComparison: task.showComparison !== false, sectionIdx: idx };
+      programmes.push(current);
+      return;
+    }
+    const group = open();
+    if (filterIds && !filterIds.has(task ? task.id : idx)) return;
+    const pos = positionOf(idx);
+    if (!pos) return;
+    group.steps.push({
+      page: pos.page, left: pos.left, right: pos.left + pos.width, top: pos.top,
+      finish: task ? (task.end || task.start || null) : null,
+    });
+  });
+  return programmes.filter((programme) => programme.steps.length);
+}
+
+/**
+ * Batch 45 — set while a PDF is built with an embedded CJK font. jsPDF's core fonts are
+ * Latin-1 only, so without this flag non-Latin characters are replaced with "?".
+ */
+let unicodeFontActive = false;
 
 function sanitizePDFText(str) {
   if (!str) return "";
-  return str
+  const normalised = String(str)
     .replace(/[\u2018\u2019\u201A\u201B]/g, "'")
     .replace(/[\u201C\u201D\u201E\u201F]/g, '"')
     .replace(/[\u2010-\u2015\u2212]/g, '-')
     .replace(/\u2026/g, '...')
-    .replace(/[\u2022\u2023\u25E6\u2043]/g, '*')
-    .replace(/[^\x00-\xFF]/g, '?');
+    .replace(/[\u2022\u2023\u25E6\u2043]/g, '*');
+  // With an embedded CJK font the real characters are kept (they are real, selectable text
+  // in the PDF); otherwise anything outside Latin-1 has to become "?".
+  return unicodeFontActive ? normalised : normalised.replace(/[^\x00-\xFF]/g, '?');
 }
 
 /**
@@ -41,8 +104,18 @@ export function buildGanttPDF({
   tasks, projectTitle, companyName, programmeRef, subtitle, 
   labelOffsets = {}, fitOnePage = false, dateRange = null, 
   durMode = "wd", fontScale = 1.0, barLabel = "item", 
-  barLabelSide = "right", textColors = {}, showStaircase = true, 
+  barLabelSide = "right", textColors = {}, showStaircase = false, 
+  staircaseFilterIds = null,   // batch 38 — chart's "Staircase filter" (BulkEditBar) rows
   columnVisibility = null,
+  // ── Print content (batch 26 — chosen in the Print Preview) ────────────────
+  // All off/false by default so an export looks exactly as before unless asked.
+  showHolidays = false,        // shade HK public holidays in the timeline
+  showToday = false,           // red "today" line
+  showRecalcDate = false,      // dashed orange line at the programme's data date
+  recalcDate = "",             // that date, "YYYY-MM-DD" (Last Recalc Date)
+  showRelationshipLines = false, // predecessor → successor arrows (within a page)
+  showComparisonBars = true,   // purple BL/late comparison bars (long-standing behaviour)
+  showComparisonArrows = false, // batch 39 — finish-date comparison between programmes
   // ── Page setup ────────────────────────────────────────────────────────────
   paperSize = "a3",           // "a3" | "a4"
   orientation = "landscape",  // "landscape" | "portrait"
@@ -59,6 +132,11 @@ export function buildGanttPDF({
   // ── Embedded data (see ganttPDFData.js): lets this PDF be re-imported with
   //    every field restored instead of going through AI/vision extraction ────
   embedData = null,
+  // ── CJK text (batch 45) ───────────────────────────────────────────────────
+  // { name, base64 } of a Unicode-capable TrueType font (see src/lib/cjkFont.js).
+  // When given, Chinese etc. is written as real text instead of "?"; jsPDF subsets the
+  // font, so the file only grows by the glyphs actually used (~0.3 MB for a page).
+  cjkFont = null,
 }) {
   const g = { ...DEFAULT_DISPLAY_SETTINGS.grid, ...(grid || {}) };
   const grpStyle = { ...DEFAULT_DISPLAY_SETTINGS.group, ...(group || {}) };
@@ -66,6 +144,21 @@ export function buildGanttPDF({
   const barStyle = { ...DEFAULT_DISPLAY_SETTINGS.bar, ...(bar || {}) };
   barStyle.critical = { ...DEFAULT_DISPLAY_SETTINGS.bar.critical, ...((bar || {}).critical || {}) };
   const doc = new jsPDF({ orientation, unit: "mm", format: paperSize });
+  // ── CJK support (batch 45) ────────────────────────────────────────────────
+  // Register the Unicode font and route every core-font request to it, so all the drawing
+  // code below keeps asking for helvetica/courier/times and still writes real Chinese text.
+  // The font is a single weight (jsPDF cannot synthesise bold from an embedded font), so
+  // bold/italic requests are normalised to it as well.
+  unicodeFontActive = !!(cjkFont && cjkFont.base64);
+  if (unicodeFontActive) {
+    const cjkName = cjkFont.name || "CJK";
+    const coreFont = /^(helvetica|courier|times|symbol|zapfdingbats)/i;
+    doc.addFileToVFS(`${cjkName}.ttf`, cjkFont.base64);
+    doc.addFont(`${cjkName}.ttf`, cjkName, "normal");
+    const coreSetFont = doc.setFont.bind(doc);
+    doc.setFont = (family, style) => coreSetFont(coreFont.test(String(family)) ? cjkName : family, coreFont.test(String(family)) ? "normal" : style);
+    doc.setFont(cjkName, "normal");
+  }
   // ── Mark the file so re-uploading it restores every field (see ganttPDFData.js) ──
   if (embedData && embedData.subject) {
     try {
@@ -506,13 +599,50 @@ export function buildGanttPDF({
     drawTableHeader(tableTop);
   }
 
+  // ── Holiday shading (opt-in from Print Preview) must sit UNDER the bars ────
+  if (showHolidays) {
+    const holidays = getHolidaysInRange(format(tMinMonth, "yyyy-MM-dd"), format(tMaxMonth, "yyyy-MM-dd"));
+    if (holidays.length) {
+      for (let p = 0; p < totalPages; p++) {
+        const tableTop = p === 0 ? TABLE_TOP_FIRST : TABLE_TOP_CONT;
+        const top = tableTop + HDR_H;
+        const bottom = top + (pageRowCounts[p] || 0) * effectiveRowH;
+        doc.setPage(p + 1);
+        holidays.forEach((iso) => {
+          const parsed = parseISO(iso);
+          if (!isValid(parsed)) return;
+          const x = GANTT_X + differenceInDays(parsed, tMinMonth) * pxPerDay;
+          if (x < GANTT_X || x > GANTT_X + GANTT_W) return;
+          const width = Math.max(pxPerDay, 0.5);
+          doc.setFillColor(250, 224, 226);              // pale red — survives printing
+          doc.rect(x, top, width, bottom - top, "F");
+          doc.setDrawColor(220, 53, 69);
+          doc.setLineWidth(0.2);
+          doc.line(x + width / 2, top, x + width / 2, bottom);
+        });
+      }
+    }
+  }
+
   // ── Draw rows ─────────────────────────────────────────────────────────────
   const barPositions = new Array(tasks.length).fill(null);
+  // Batch 38 — positions for the printed staircase. Bars use their drawn geometry; a
+  // milestone gets its own entry (the chart's staircase steps through milestones too,
+  // because its bpMap treats a milestone as a one-day bar).
+  const staircasePositions = new Array(tasks.length).fill(null);
   const hexToRgb = (hex) => {
     const h = (hex || "#333333").replace("#", "");
     return [parseInt(h.substr(0, 2), 16), parseInt(h.substr(2, 2), 16), parseInt(h.substr(4, 2), 16)];
   };
 
+  // Batch 36 — the per-programme `showComparison` flag is NOT what hides the purple/brown
+  // comparison bars: on screen the bars are drawn whenever the compared dates differ
+  // (`hasBL`/`hasLate`/`hasEarly` in UnifiedGanttLayout) and that flag only drives the
+  // comparison arrows between programmes. Batch 33 wrongly used it as a gate here, so an
+  // imported programme (parsers set `showComparison: false` on every row) printed no
+  // comparison bars at all while the chart showed them. The printed bars now follow the
+  // Print Preview switch (`showComparisonBars`) and the date comparison — exactly the
+  // screen's rule.
   tasks.forEach((task, idx) => {
     const pos = taskPageMap.get(idx);
     if (!pos) return;
@@ -587,21 +717,15 @@ export function buildGanttPDF({
       doc.setFontSize(currentFontSize);
       let textWidth = doc.getTextWidth(sanitized);
       
-      // Reduce font size if text is too wide (max 20% reduction)
-      while (textWidth > cellWidth - 2 && currentFontSize > baseFontSize * 0.8) {
-        currentFontSize -= 0.5;
+      // Batch 30: shrink the font until the WHOLE value fits (3.5pt floor) instead
+      // of cutting it off with "..." — nothing is hidden in the PDF any more.
+      while (textWidth > cellWidth - 2 && currentFontSize > 3.5) {
+        currentFontSize = Math.max(3.5, currentFontSize - 0.25);
         doc.setFontSize(currentFontSize);
         textWidth = doc.getTextWidth(sanitized);
       }
       
-      // If still too wide, truncate with ellipsis
-      if (textWidth > cellWidth - 2) {
-        let truncated = sanitized;
-        while (truncated.length > 3 && doc.getTextWidth(truncated + "...") > cellWidth - 2) {
-          truncated = truncated.slice(0, -1);
-        }
-        return truncated + "...";
-      }
+      // (batch 30) no "...": the value is never truncated, only scaled down
       
       return sanitized;
     };
@@ -682,18 +806,29 @@ export function buildGanttPDF({
       const val = f.fmt(rawVal);
       const fittedVal = fitTextInCell(val, f.w, "center");
       doc.setFontSize(Math.max(3.5, baseFontSize - 1));
-      const isBlPurple = f.key === "blStart" || f.key === "blEnd";
-      if (isBlPurple) doc.setTextColor(124, 58, 237);
+      const isBlCell = f.key === "blStart" || f.key === "blEnd";
+      // Batch 36 — the chart's BL columns are brown (#733208), not purple.
+      if (isBlCell) doc.setTextColor(...hexToRgbArray("#733208"));
       doc.text(fittedVal, cx + f.w / 2, textY, { align: "center" });
       cx += f.w;
-      if (isBlPurple) doc.setTextColor(...TEXT_DARK);
+      if (isBlCell) doc.setTextColor(...TEXT_DARK);
     });
     doc.setFontSize(baseFontSize);
     doc.setTextColor(...TEXT_DARK);
 
     // Draw bar with comparison (BL or Late) OR milestone
-    const barColor = task.barType === "delay" ? hexToRgbArray(barStyle.delayColor) : hexToRgbArray(barStyle.baselineColor);
-    const COMPARISON_COLOR = [124, 58, 237]; // Purple for BL/Late
+    // Batch 38 — the same row rules as the chart: a `deletedFromBL` row is positioned with
+    // its BL dates (chart's bpMap does the same) and painted #dc3545, and it is never
+    // treated as "critical".
+    const isDeletedRow = !!task.deletedFromBL;
+    const rowStart = task.start || (isDeletedRow ? task.baselineStart : null) || task.end;
+    const rowEnd = task.end || (isDeletedRow ? task.baselineFinish : null) || task.start;
+    const barColor = isDeletedRow ? hexToRgbArray("#dc3545")
+      : task.barType === "delay" ? hexToRgbArray(barStyle.delayColor)
+      : hexToRgbArray(barStyle.baselineColor);
+    // Batch 36/39 — same brown as the chart (#733208) for the comparison bars and
+    // milestones; see COMPARISON_BROWN.
+    const COMPARISON_COLOR = COMPARISON_BROWN;
     const blVisible = columnVisibility?.blStart?.visible !== false || columnVisibility?.blEnd?.visible !== false;
     const lateVisible = columnVisibility?.lateStart?.visible !== false || columnVisibility?.lateEnd?.visible !== false;
     const earlyVisible = columnVisibility?.earlyStart?.visible !== false || columnVisibility?.earlyEnd?.visible !== false;
@@ -701,13 +836,13 @@ export function buildGanttPDF({
     const useEarlyAsComparison = earlyVisible && !blVisible && !lateVisible;
     const compStart = useLateAsComparison ? (task.lateStart || task.start) : useEarlyAsComparison ? (task.earlyStart || task.start) : task.baselineStart;
     const compEnd = useLateAsComparison ? (task.lateEnd || task.end) : useEarlyAsComparison ? (task.earlyEnd || task.end) : task.baselineFinish;
-    const hasComparison = compStart && compEnd && (compStart !== task.start || compEnd !== task.end);
+    const hasComparison = showComparisonBars && !isDeletedRow && compStart && compEnd && (compStart !== task.start || compEnd !== task.end);
     // Bar height follows the Gantt Settings (18px on the 27px screen row = 0.67)
     const barFraction = Math.min(0.9, Math.max(0.25, (barStyle.heightPx || 18) / 27));
     const barH = Math.max(0.8, effectiveRowH * barFraction);
     const HALF_H = barH / 2;
     const barTopBase = rowY + (effectiveRowH - barH) / 2;
-    const isCriticalBar = barStyle.critical.enabled && task.float != null && Number(task.float) <= 0;
+    const isCriticalBar = !isDeletedRow && barStyle.critical.enabled && task.float != null && Number(task.float) <= 0;
     const barFill = isCriticalBar ? hexToRgbArray(barStyle.critical.color) : barColor;
     const barBorder = isCriticalBar ? barStyle.critical.borderColor : barStyle.borderColor;
     
@@ -721,6 +856,9 @@ export function buildGanttPDF({
       const mileParsed = parseISO(mileDate);
       if (isValid(mileParsed)) {
         const mileX = GANTT_X + differenceInDays(mileParsed, tMinMonth) * pxPerDay;
+        // Batch 38 — the chart's staircase steps through milestone rows as well, so give
+        // the milestone a step position (its bpMap entry is bpos(start, start): one day).
+        staircasePositions[idx] = { page, left: mileX, width: Math.max(pxPerDay, 0.5), top: barTopBase };
         const DS = Math.max(1.2, (barStyle.milestoneSize || 8) * 0.32); // half-size in mm
         const centerY = barTopBase + HALF_H;
         const shape = barStyle.milestoneShape || "diamond";
@@ -765,13 +903,13 @@ export function buildGanttPDF({
           : useEarlyAsComparison
           ? (isStartMile ? (task.earlyStart || task.start) : (task.earlyEnd || task.end))
           : (isStartMile ? task.baselineStart : task.baselineFinish);
-        const hasCompMile = compMileDate && compMileDate !== mileDate;
+        const hasCompMile = showComparisonBars && !isDeletedRow && compMileDate && compMileDate !== mileDate;
         
         if (hasCompMile) {
           const compMileParsed = parseISO(compMileDate);
           if (isValid(compMileParsed)) {
             const compMileX = GANTT_X + differenceInDays(compMileParsed, tMinMonth) * pxPerDay;
-            doc.setDrawColor(...COMPARISON_COLOR); // Purple
+            doc.setDrawColor(...COMPARISON_COLOR); // hollow brown marker, like the chart
             doc.setLineWidth(0.5);
             // Hollow marker in the configured shape
             if (shape === "circle" && doc.circle) {
@@ -787,8 +925,8 @@ export function buildGanttPDF({
           }
         }
       }
-    } else if (task.start && task.end) {
-      const s = parseISO(task.start), e = parseISO(task.end);
+    } else if (rowStart && rowEnd) {
+      const s = parseISO(rowStart), e = parseISO(rowEnd);
       if (isValid(s) && isValid(e) && e >= s) {
         const barLeft = GANTT_X + differenceInDays(s, tMinMonth) * pxPerDay;
         const barWidth = Math.max((differenceInDays(e, s) + 1) * pxPerDay, 1);
@@ -799,7 +937,7 @@ export function buildGanttPDF({
           if (isValid(cs) && isValid(ce) && ce >= cs) {
             const compBarLeft = GANTT_X + differenceInDays(cs, tMinMonth) * pxPerDay;
             const compBarWidth = Math.max((differenceInDays(ce, cs) + 1) * pxPerDay, 1);
-            doc.setFillColor(...COMPARISON_COLOR); // Purple for BL/Late
+            doc.setFillColor(...COMPARISON_COLOR); // brown #733208, same as the chart
             doc.rect(compBarLeft, barTopBase, compBarWidth, HALF_H, "F");
           }
           // Draw current bar (bottom half)
@@ -810,9 +948,318 @@ export function buildGanttPDF({
         }
         
         barPositions[idx] = { left: barLeft, width: barWidth, top: barTopBase, height: HALF_H * 2, page };
+
+        // ── Bar Info (batch 28) — the xerviewer.org switches ──────────────────
+        // Only drawn when a Bar Info switch is actually on, so an export that
+        // never touched that section stays byte-identical. Text matches the
+        // on-screen chart exactly (same helper): Labels field + name/dates.
+        // Batch 29: position (inside / before / after), font family (mapped to the
+        // closest jsPDF core font), size and both colours come from the panel.
+        if (hasBarInfo(barStyle)) {
+          const caption = buildBarTextParts(task, barStyle, dateFormat);
+          const labelPos = normalizeBarTextPosition(barStyle.label?.position);
+          const baseline = barTopBase + barH / 2 + 1.1;
+          doc.setFont(pdfCoreFontFor(barStyle.label?.fontFamily), "normal");
+          doc.setFontSize(Math.max(4, (barStyle.label?.fontSize || 10) * 0.75));
+          const widthOf = (t) => (typeof doc.getTextWidth === "function" ? doc.getTextWidth(t) : t.length * 1.2);
+          const fitsInside = barWidth >= widthOf(caption.main) + 2.4;
+          // Batch 32: with both dates on, the main caption sits inside (when it fits)
+          // or on its Position side; the two dates always take the bar's front/back.
+          const mainSide = !caption.main ? null
+            : (labelPos === "inside" && fitsInside) ? "inside"
+            : labelPos === "before" ? "front" : "back";
+
+          if (mainSide === "inside") {
+            doc.setTextColor(...hexToRgbArray(barStyle.label?.color || "#ffffff"));
+            doc.text(sanitizePDFText(caption.main), barLeft + 1.2, baseline);
+          }
+          doc.setTextColor(...hexToRgbArray(barStyle.label?.colorOutside || "#333333"));
+          // In front of the bar (right-aligned against its left edge): caption then date.
+          let frontX = barLeft - 1.5;
+          if (caption.front) {
+            doc.text(sanitizePDFText(caption.front), frontX, baseline, { align: "right" });
+            frontX -= widthOf(caption.front) + 2;
+          }
+          if (mainSide === "front") doc.text(sanitizePDFText(caption.main), frontX, baseline, { align: "right" });
+          // Behind the bar: date then caption.
+          let backX = barLeft + barWidth + 1.5;
+          if (caption.back) {
+            doc.text(sanitizePDFText(caption.back), backX, baseline);
+            backX += widthOf(caption.back) + 2;
+          }
+          if (mainSide === "back") doc.text(sanitizePDFText(caption.main), backX, baseline);
+
+          doc.setTextColor(0, 0, 0);
+          doc.setFont("helvetica", "normal");
+        }
       }
     }
   });
+
+  // ── Print content (batch 26): today line, staircase, relationship arrows ──
+  // Everything below is opt-in from the Print Preview, uses the bar geometry
+  // recorded while drawing, and is drawn on top of the bars.
+  const dateToX = (iso) => {
+    const parsed = parseISO(iso);
+    if (!isValid(parsed)) return null;
+    return GANTT_X + differenceInDays(parsed, tMinMonth) * pxPerDay;
+  };
+  const rowYOf = (idx) => {
+    const pos = taskPageMap.get(idx);
+    if (!pos) return null;
+    const tableTop = pos.page === 0 ? TABLE_TOP_FIRST : TABLE_TOP_CONT;
+    return { page: pos.page, y: tableTop + HDR_H + pos.localRowIdx * effectiveRowH };
+  };
+
+  if (showToday) {
+    const todayX = dateToX(format(new Date(), "yyyy-MM-dd"));
+    if (todayX != null && todayX >= GANTT_X && todayX <= GANTT_X + GANTT_W) {
+      for (let p = 0; p < totalPages; p++) {
+        const tableTop = p === 0 ? TABLE_TOP_FIRST : TABLE_TOP_CONT;
+        const bottom = tableTop + HDR_H + (pageRowCounts[p] || 0) * effectiveRowH;
+        doc.setPage(p + 1);
+        doc.setDrawColor(220, 53, 69);
+        doc.setLineWidth(0.35);
+        doc.line(todayX, tableTop + HDR_H, todayX, bottom);
+      }
+    }
+  }
+
+  if (showRecalcDate && recalcDate) {
+    // Mirrors the on-screen "Last Recalc Date" line (UnifiedGanttLayout): a dashed
+    // orange data-date line with a small label, so it can never be mistaken for
+    // the solid red today line. Drawn only when the date falls inside the range.
+    const recalcX = dateToX(recalcDate);
+    if (recalcX != null && recalcX >= GANTT_X && recalcX <= GANTT_X + GANTT_W) {
+      const label = `Last Recalc ${recalcDate}`;
+      for (let p = 0; p < totalPages; p++) {
+        const tableTop = p === 0 ? TABLE_TOP_FIRST : TABLE_TOP_CONT;
+        const top = tableTop + HDR_H;
+        const bottom = top + (pageRowCounts[p] || 0) * effectiveRowH;
+        doc.setPage(p + 1);
+        doc.setDrawColor(232, 130, 25);
+        doc.setLineWidth(0.5);
+        if (typeof doc.setLineDashPattern === "function") doc.setLineDashPattern(...pdfDashPattern("dashed"));
+        doc.line(recalcX, top, recalcX, bottom);
+        resetLineStyle();
+        // Label on a small plate so it stays readable over any bar.
+        doc.setFontSize(5.5);
+        const textW = typeof doc.getTextWidth === "function" ? doc.getTextWidth(label) : label.length * 1.0;
+        doc.setFillColor(255, 249, 241);
+        doc.rect(recalcX + 0.8, top - 0.4, Math.min(textW + 1.6, GANTT_X + GANTT_W - recalcX - 1), 3.4, "F");
+        doc.setTextColor(232, 130, 25);
+        doc.text(label, recalcX + 1.6, top + 2);
+      }
+      doc.setTextColor(0, 0, 0);
+    }
+  }
+
+  // Batch 38/39 — the programme groups (chart rule) are shared by the printed staircase
+  // and by the printed comparison arrows.
+  const staircaseGroups = (showStaircase || showComparisonArrows)
+    ? collectStaircaseSteps(tasks, (idx) => barPositions[idx] || staircasePositions[idx], staircaseFilterIds)
+    : [];
+
+  if (showStaircase) {
+    // Mirrors the on-screen "Staircase Line" exactly (UnifiedGanttLayout):
+    //   · the line hugs the TOP edge of each bar (not the row centre),
+    //   · it only moves right (bars that finish behind the running maximum are skipped),
+    //   · it ends with a short tail dropping half a row below the last point,
+    //   · stroke width 2 px on a 27 px row, scaled to the printed row height.
+    //
+    // Batch 35 — two multi-page bugs:
+    //   · jsPDF writes setDrawColor / setLineWidth into the page that is current *when
+    //     they are called*. Setting them once before the loop therefore painted exactly
+    //     one page red (the page that happened to be current) and left the others in the
+    //     PDF default state — thin black, which reads as grey at preview zoom. The style
+    //     is now applied after every setPage().
+    //   · steps used to be dropped as soon as the row moved to the next page, so a
+    //     programme crossing a page break lost the rest of its staircase. Steps now carry
+    //     their page and the running maximum is carried over the break.
+    //
+    // Batch 38 — which rows take part is now the chart's rule (see collectStaircaseSteps):
+    // milestones count, `deletedFromBL` rows count, a leading group without a section
+    // counts, and the BulkEditBar "Staircase filter" restricts the rows.
+    const programmes = staircaseGroups;
+    const applyStaircaseStyle = () => {
+      // A stale dash pattern from the grid / recalc line must never reach the staircase
+      // (a dashed red line reads grey as well).
+      resetLineStyle();
+      doc.setDrawColor(220, 53, 69);
+      // Width: 2 px on a 27 px row (same proportion as the screen), but never below 1 mm.
+      // Measured at 66 dpi (what the preview panel shows) a 0.6 mm line was roughly half
+      // anti-aliasing and read as grey; 1 mm keeps a solid red core at every zoom level.
+      doc.setLineWidth(Math.min(1.2, Math.max(1.0, (effectiveRowH * 2) / 27)));
+    };
+    programmes.forEach((programme) => {
+      const first = programme.steps[0];
+      let page = first.page;
+      let reach = first.right;
+      let currentY = first.top;
+      doc.setPage(page + 1);
+      applyStaircaseStyle();
+      doc.line(first.left, currentY, reach, currentY);
+      for (let i = 1; i < programme.steps.length; i += 1) {
+        const step = programme.steps[i];
+        if (step.page !== page) {
+          // Page break: continue the running maximum from the chart's left edge.
+          page = step.page;
+          doc.setPage(page + 1);
+          applyStaircaseStyle();
+          doc.line(GANTT_X, currentY, Math.max(reach, GANTT_X), currentY);
+        }
+        if (step.right < reach) continue;                 // a bar hidden behind the line
+        doc.line(reach, currentY, reach, step.top);       // step down to the next bar top
+        doc.line(reach, step.top, step.right, step.top);  // run along that bar's top
+        reach = step.right;
+        currentY = step.top;
+      }
+      doc.line(reach, currentY, reach, currentY + effectiveRowH / 2);   // closing tail
+    });
+  }
+
+  if (showComparisonArrows) {
+    // Mirrors the chart's "Comparison Arrows" (UnifiedGanttLayout ▸ the `cmp-*` group):
+    //   · one arrow per adjacent pair of programmes whose Compare flag is on,
+    //   · x1/x2 = the programme's right-most bar edge (`gex`), i.e. its finish,
+    //   · dashed #733208 verticals at both finishes, a diamond at each, a double-headed
+    //     arrow between them on the SECOND programme's section row, and a white label with
+    //     the difference in days — working days or calendar days (Dur mode), like the chart
+    //     (`|differenceInDays| + 1` for calendar, `countWorkingDays` for working).
+    const rowScale = effectiveRowH / 27;               // same scale the bars/staircase use
+    const lineW = Math.max(0.3, 1.5 * rowScale);
+    const diamond = Math.max(1.2, 5 * rowScale);
+    const headSize = Math.max(1.2, 5 * rowScale);
+    const labelW = Math.max(14, 80 * rowScale);
+    const labelH = Math.max(4.5, 20 * rowScale);
+    const applyArrowStyle = () => {
+      resetLineStyle();
+      doc.setDrawColor(...COMPARISON_BROWN);
+      doc.setLineWidth(lineW);
+      if (typeof doc.setLineDashPattern === "function") {
+        // the chart's `strokeDasharray="5,3"`, in mm
+        doc.setLineDashPattern([Math.max(1.2, 5 * rowScale), Math.max(0.8, 3 * rowScale)], 0);
+      }
+    };
+    const finishOf = (programme) => programme.steps.reduce((latest, step) => {
+      const d = step.finish ? parseISO(step.finish) : null;
+      return d && isValid(d) && (!latest || d > latest) ? d : latest;
+    }, null);
+
+    for (let i = 0; i < staircaseGroups.length - 1; i += 1) {
+      const a = staircaseGroups[i];
+      const b = staircaseGroups[i + 1];
+      if (a.showComparison === false || b.showComparison === false) continue;
+      const x1 = Math.max(...a.steps.map((s) => s.right));
+      const x2 = Math.max(...b.steps.map((s) => s.right));
+      const d1 = finishOf(a);
+      const d2 = finishOf(b);
+      if (!d1 || !d2) continue;
+      const earlier = d1 < d2 ? d1 : d2;
+      const later = d1 < d2 ? d2 : d1;
+      const diffCal = differenceInDays(later, earlier) + 1;
+      const diffWd = countWorkingDays(format(earlier, "yyyy-MM-dd"), format(later, "yyyy-MM-dd"));
+      const value = durMode === "wd" ? diffWd : diffCal;
+      const unit = durMode === "wd" ? "WD" : "Cal";
+      const lx = Math.min(x1, x2);
+      const rx = Math.max(x1, x2);
+
+      // Dashed verticals down every page's chart area (the chart draws them over all rows)
+      for (let p = 0; p < totalPages; p += 1) {
+        const tableTop = p === 0 ? TABLE_TOP_FIRST : TABLE_TOP_CONT;
+        const top = tableTop + HDR_H;
+        const bottom = top + (pageRowCounts[p] || 0) * effectiveRowH;
+        doc.setPage(p + 1);
+        applyArrowStyle();
+        doc.line(x1, top, x1, bottom);
+        doc.line(x2, top, x2, bottom);
+        resetLineStyle();
+      }
+
+      // Arrow + label on the second programme's section row
+      const sectionRow = b.sectionIdx != null ? rowYOf(b.sectionIdx) : null;
+      const arrowPage = sectionRow ? sectionRow.page : (b.steps[0].page || 0);
+      const tableTop = arrowPage === 0 ? TABLE_TOP_FIRST : TABLE_TOP_CONT;
+      const ay = (sectionRow ? sectionRow.y : tableTop + HDR_H) + effectiveRowH / 2;
+      doc.setPage(arrowPage + 1);
+      applyArrowStyle();
+      doc.line(lx, ay, rx, ay);                      // the measured span itself
+      resetLineStyle();
+      doc.setFillColor(...COMPARISON_BROWN);
+      // Diamonds on both finishes (the chart's 4-point diamond = two triangles)
+      doc.triangle(x1, ay - diamond, x1, ay + diamond, x1 + diamond, ay, "F");
+      doc.triangle(x1, ay - diamond, x1, ay + diamond, x1 - diamond, ay, "F");
+      doc.triangle(x2, ay - diamond, x2, ay + diamond, x2 + diamond, ay, "F");
+      doc.triangle(x2, ay - diamond, x2, ay + diamond, x2 - diamond, ay, "F");
+      // Arrowheads pointing outwards, like the chart's `ah()` polygons
+      doc.triangle(lx, ay, lx + headSize, ay - headSize / 2, lx + headSize, ay + headSize / 2, "F");
+      doc.triangle(rx, ay, rx - headSize, ay - headSize / 2, rx - headSize, ay + headSize / 2, "F");
+      // Label plate with the day difference
+      const labX = lx + (rx - lx) / 2 - labelW / 2;
+      const labY = ay - labelH / 2;
+      doc.setFillColor(255, 255, 255);
+      doc.setDrawColor(...COMPARISON_BROWN);
+      doc.setLineWidth(lineW);
+      if (typeof doc.roundedRect === "function") doc.roundedRect(labX, labY, labelW, labelH, 0.8, 0.8, "FD");
+      else doc.rect(labX, labY, labelW, labelH, "FD");
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(Math.max(5.5, 11 * 0.75));
+      doc.setTextColor(...COMPARISON_BROWN);
+      doc.text(`${value} ${unit}`, labX + labelW / 2, labY + labelH * 0.66, { align: "center" });
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(0, 0, 0);
+    }
+  }
+
+  if (showRelationshipLines) {
+    const REL_COLORS = { FS: [0, 90, 83], SS: [0, 53, 49], FF: [115, 50, 8], SF: [232, 130, 25] };
+    const lookup = new Map();
+    tasks.forEach((task, idx) => {
+      if (task.isSection) return;
+      const geom = barPositions[idx];
+      const row = rowYOf(idx);
+      if (geom && row) lookup.set(task.id, { geom, row, task });
+    });
+    const arrow = (fromX, fromY, toX, toY, colour) => {
+      const elbowX = toX >= fromX ? fromX + 2 : fromX - 2;
+      doc.setDrawColor(...colour);
+      doc.setLineWidth(0.45);                 // visible at preview zoom (was 0.3)
+      doc.line(fromX, fromY, elbowX, fromY);
+      doc.line(elbowX, fromY, elbowX, toY);
+      doc.line(elbowX, toY, toX, toY);
+      const size = 1.1;
+      const goingRight = toX >= elbowX;
+      doc.setFillColor(...colour);
+      if (goingRight) doc.triangle(toX, toY, toX - size, toY - size / 2, toX - size, toY + size / 2, "F");
+      else doc.triangle(toX, toY, toX + size, toY - size / 2, toX + size, toY + size / 2, "F");
+    };
+    const seen = new Set();
+    lookup.forEach(({ task, row, geom }) => {
+      const rels = [];
+      if (Array.isArray(task.links)) {
+        task.links.forEach((link) => rels.push({ succId: link.succId, type: link.type || "FS" }));
+      }
+      if (task.link != null && !(Array.isArray(task.links) && task.links.some((l) => Number(l.succId) === Number(task.link)))) {
+        rels.push({ succId: task.link, type: task.linkType || "FS" });
+      }
+      rels.forEach((rel) => {
+        const succ = lookup.get(rel.succId) || lookup.get(Number(rel.succId)) || lookup.get(String(rel.succId));
+        if (!succ) return;
+        if (succ.row.page !== row.page) return;                 // cross-page links are not drawn
+        const key = `${task.id}-${rel.succId}-${rel.type}`;
+        if (seen.has(key)) return;
+        seen.add(key);
+        const predY = row.y + effectiveRowH / 2;
+        const succY = succ.row.y + effectiveRowH / 2;
+        const type = rel.type || "FS";
+        const colour = REL_COLORS[type] || REL_COLORS.FS;
+        const fromX = (type === "FS" || type === "FF") ? geom.left + geom.width : geom.left;
+        const toX = (type === "FS" || type === "SS") ? succ.geom.left : succ.geom.left + succ.geom.width;
+        doc.setPage(row.page + 1);
+        arrow(fromX, predY, toX, succY, colour);
+      });
+    });
+  }
 
   // ── Outer borders ─────────────────────────────────────────────────────────
   for (let p = 0; p < totalPages; p++) {
@@ -843,6 +1290,9 @@ export function buildGanttPDF({
     }
   }
 
+  // Batch 45 — the CJK flag is module state (the build is synchronous), so clear it here.
+  unicodeFontActive = false;
+
   return {
     doc,
     filename: `${projectTitle || "Gantt"}.pdf`,
@@ -856,8 +1306,12 @@ export function buildGanttPDF({
  * Build the PDF and immediately download it.
  * Kept as the public entry point so every existing caller behaves exactly as before.
  */
-export function exportGanttPDF(options) {
-  const { doc, filename } = buildGanttPDF(options);
+export async function exportGanttPDF(options = {}) {
+  const { tasks, embedData: given, ...rest } = options;
+  // Batch 12: a PDF must never leave this module without the re-import marker,
+  // so this legacy entry point embeds the full task array too.
+  const embedData = given ?? (Array.isArray(tasks) && tasks.length ? await encodeTasksForPDF(tasks) : null);
+  const { doc, filename } = buildGanttPDF({ ...rest, tasks, embedData });
   doc.save(filename);
   return { doc, filename };
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { FolderTree, List, CalendarRange, BarChart3, Settings, X } from "lucide-react";
 import WbsSettingsPanel from "./WbsSettingsPanel";
+import LocalOcrSettings from "./LocalOcrSettings";
 import GanttSettingsPanel from "./GanttSettingsPanel";
 import ColumnVisibilityPanel from "./ColumnVisibilityPanel";
 
@@ -174,6 +175,12 @@ export default function GlobalSettingsPanel({
 
             {tab === "other" && (
               <>
+                {/* Batch 25: pick which local OCR engine cross-checks scanned pages
+                    (same control as the one inside the Import dialog). */}
+                <div className="p-4 border-b border-border">
+                  <div className="text-sm font-medium text-text mb-2">Local OCR (scan verification)</div>
+                  <LocalOcrSettings />
+                </div>
                 {displayToggles.length > 0 && (
                   <div className="p-4 border-b border-border">
                     <div className="text-sm font-medium text-text mb-2">Display</div>
@@ -182,6 +189,7 @@ export default function GlobalSettingsPanel({
                         <button
                           key={item.label}
                           onClick={item.toggle}
+                          title={item.hint || item.label}
                           className={`w-full text-left px-3 py-1.5 rounded text-xs font-medium transition-all flex items-center justify-between ${
                             item.on ? "bg-surface-subtle text-primary" : "text-text hover:bg-surface-muted"
                           }`}

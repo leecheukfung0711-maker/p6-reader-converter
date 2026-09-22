@@ -11,7 +11,9 @@ import { buildXER, P6_VERSIONS } from "@/lib/exportXER";
 import { buildP6XML } from "@/lib/exportP6XML";
 import { loadMapping } from "@/components/gantt/XerMappingDialog";
 import { parseISO, isValid, format } from "date-fns";
+import { normalizeRecalcDate } from "@/lib/quickFilters";
 import { DATE_FORMATS, LINE_STYLES } from "@/lib/displaySettings";
+import { loadCjkFont, cjkFontBase64, programmeNeedsCjk, CJK_FONT_NAME } from "@/lib/cjkFont";
 import * as XLSX from "xlsx";
 
 const STORAGE_KEY = "gantt_export_settings";
@@ -43,6 +45,30 @@ function saveSettings(settings) {
   } catch (e) {
     console.error("Failed to save export settings:", e);
   }
+}
+
+/**
+ * Batch 34 — "Comparison bars" now default to OFF on paper (the chart draws them whenever
+ * the compared dates differ). Settings saved before that change contain an explicit `true`
+ * that merely came from the old default, so it is dropped once;
+ * from the next save on (printOptionsVersion 2) the user's own choice is preserved.
+ */
+export const PRINT_OPTIONS_VERSION = 2;
+
+export function migratePrintOptions(savedPrint = {}, savedVersion = 1) {
+  if (savedVersion >= PRINT_OPTIONS_VERSION) return { ...savedPrint };
+  const rest = { ...savedPrint };
+  delete rest.showComparisonBars;          // came from the old "on" default
+  return rest;
+}
+
+/**
+ * The printed "Comparison bars" switch also flips the programmes' `showComparison` flag
+ * (Display ▸ Comparison Arrows), and the preview rebuild needs the new value right away:
+ * React state is not applied yet when the rebuild runs.
+ */
+export function withComparisonFlag(tasks, value) {
+  return (tasks || []).map((t) => (t.isSection ? { ...t, showComparison: !!value } : t));
 }
 
 // ── Relationship helpers ──────────────────────────────────────────────────────
@@ -109,7 +135,7 @@ function injectRelationshipsIntoXML(xmlText, newRels, existingRels, activities) 
   return '<?xml version="1.0" encoding="utf-8"?>\n' + serializer.serializeToString(doc).replace(/^<\?xml[^>]*\?>/, "").trim();
 }
 
-export default function ExportDialog({ tasks, projectTitle, labelOffsets = {}, durMode = "wd", showStaircase = true, columnVisibilityProp = null, cwProp, displaySettings = null, onDisplaySettingsChange = null, xerSource = null, onClose, onOpenXerMapping }) {
+export default function ExportDialog({ tasks, projectTitle, labelOffsets = {}, durMode = "wd", columnVisibilityProp = null, displaySettings = null, onDisplaySettingsChange = null, xerSource = null, recalcDate = "", staircaseFilterIds = null, onToggleComparisonBars = null, onClose, onOpenXerMapping }) {
   const [mode, setMode] = useState("pdf"); // "pdf" | "excel" | "xer" | "xml" | "rel"
   const [excelType, setExcelType] = useState("gantt"); // "gantt" | "p6"
 
@@ -183,6 +209,25 @@ export default function ExportDialog({ tasks, projectTitle, labelOffsets = {}, d
   const [useCustomRange, setUseCustomRange] = useState(savedSettings?.pdf?.useCustomRange || false);
   const [customStart, setCustomStart] = useState(savedSettings?.pdf?.customStart || "");
   const [customEnd, setCustomEnd] = useState(savedSettings?.pdf?.customEnd || "");
+  // ── Print content (batch 26): what else goes on the paper, chosen in the
+  //    Print Preview. Every option defaults to OFF — batch 34 flipped "Comparison
+  //    bars" from on to off, because the purple baseline bars are an exception view
+  //    and the printed sheet should show the current programme only unless asked.
+  const [printOptions, setPrintOptions] = useState(() => ({
+    showHolidays: false, showToday: false, showStaircase: false,
+    showRelationshipLines: false, showComparisonBars: false,
+    // Batch 39 — the chart's comparison arrows (finish-date difference between programmes)
+    showComparisonArrows: false,
+    // Batch 45 — embed the CJK font so Chinese prints as real text (only fetched when the
+    // programme actually contains non-Latin text, see the effect below).
+    embedCjkFont: true,
+    showRecalcDate: false,          // batch 27 — the programme's data date line
+    ...migratePrintOptions(savedSettings?.pdf?.printOptions, savedSettings?.pdf?.printOptionsVersion),
+  }));
+
+  // Batch 45 — CJK font state ("idle" | "loading" | "ready" | "error") + lazy loading.
+  const [cjkFont, setCjkFont] = useState(() => cjkFontBase64());
+  const [cjkStatus, setCjkStatus] = useState(() => (cjkFontBase64() ? "ready" : "idle"));
 
   // XER state
   const today = new Date().toISOString().slice(0, 10);
@@ -199,7 +244,13 @@ export default function ExportDialog({ tasks, projectTitle, labelOffsets = {}, d
   const [projectId, setProjectId] = useState(srcProjRow?.proj_short_name || savedSettings?.xer?.projectId || "PROJ001");
   const [xerProjectName, setXerProjectName] = useState(srcRootWbs?.wbs_name || savedSettings?.xer?.projectName || "Exported Project");
   const [calendarName, setCalendarName] = useState(savedSettings?.xer?.calendarName || "Standard");
-  const [exportDate, setExportDate] = useState(() => srcProjRow?.last_recalc_date?.slice(0, 10) || earliestDate || savedSettings?.xer?.exportDate || today);
+  const [exportDate, setExportDate] = useState(() => (
+    // Batch 27: the data date set in the app (right-click a date column) is what
+    // the exported record should carry — the XER/XML file's own value is the fallback.
+    normalizeRecalcDate(recalcDate)
+    || srcProjRow?.last_recalc_date?.slice(0, 10)
+    || earliestDate || savedSettings?.xer?.exportDate || today
+  ));
 
   // Auto date range from tasks
   const autoRange = useMemo(() => {
@@ -226,28 +277,219 @@ export default function ExportDialog({ tasks, projectTitle, labelOffsets = {}, d
     if (pdfPreviewUrlRef.current) URL.revokeObjectURL(pdfPreviewUrlRef.current);
   }, []);
 
-  const buildPdfOptions = () => {
+  const buildPdfOptions = (overrides = {}) => {
     const dateRange = useCustomRange && customStart && customEnd ? { start: customStart, end: customEnd } : null;
     // Pass current columnVisibility to PDF export - only visible columns will be exported
-    return { tasks, projectTitle: programmeRef, companyName, programmeRef, subtitle, labelOffsets, fitOnePage, dateRange, durMode, fontScale, barLabel, barLabelSide, textColors, showStaircase, columnVisibility: columnVisibilityProp,
+    return { tasks, projectTitle: programmeRef, companyName, programmeRef, subtitle, labelOffsets, fitOnePage, dateRange, durMode, fontScale, barLabel, barLabelSide, textColors, showStaircase: printOptions.showStaircase, staircaseFilterIds, columnVisibility: columnVisibilityProp,
+      // Batch 45 — Chinese prints as real text once the font is loaded (see the effect below)
+      cjkFont: cjkFont ? { name: CJK_FONT_NAME, base64: cjkFont } : null,
       // page setup + grid/date format (batch 1)
       paperSize, orientation, margin: pdfMargin, footerLeft, footerCenter, footerRight,
-      grid: dsGrid, dateFormat: ds.dateFormat || "yyyy-MM-dd", bar: ds.bar || null,
+      grid: dsGrid, dateFormat: ds.dateFormat || "yyyy-MM-dd", bar: overrides.bar || ds.bar || null,
       // WBS row colours (batch 8) — keeps the PDF in sync with the WBS Settings panel
-      group: ds.group || null, wbs: ds.wbs || null };
+      group: ds.group || null, wbs: ds.wbs || null,
+      // print content (batch 26) — chosen in the Print Preview
+      showHolidays: printOptions.showHolidays, showToday: printOptions.showToday,
+      showRelationshipLines: printOptions.showRelationshipLines, showComparisonBars: printOptions.showComparisonBars,
+      showComparisonArrows: printOptions.showComparisonArrows,     // batch 39
+      // batch 27 — the programme's data date (set by right-clicking a date column)
+      showRecalcDate: printOptions.showRecalcDate,
+      recalcDate: normalizeRecalcDate(recalcDate) || srcProjRow?.last_recalc_date?.slice(0, 10) || "" };
   };
 
   // "Preview PDF" — build once, show it, keep the document for the download
+  const embedDataRef = useRef(null);
   const handleExportPDF = async () => {
     // Embed the FULL task array in the PDF metadata so re-uploading this file restores
     // every field (no AI/vision pass). See src/lib/ganttPDFData.js.
     const embedData = await encodeTasksForPDF(tasks);
+    embedDataRef.current = embedData;
     const { doc, filename, pageCount } = buildGanttPDF({ ...buildPdfOptions(), embedData });
     pdfDocRef.current = doc;
-    setPdfPreview({ url: URL.createObjectURL(doc.output("blob")), filename, pageCount });
+    const blob = doc.output("blob");
+    setPdfPreview({ url: URL.createObjectURL(blob), filename, pageCount, builtAt: Date.now(), sizeBytes: blob?.size ?? null });
     saveSettings({
-      pdf: { companyName, programmeRef, subtitle, fitOnePage, fontScale, barLabel, barLabelSide, textColors, useCustomRange, customStart, customEnd },
+      pdf: { companyName, programmeRef, subtitle, fitOnePage, fontScale, barLabel, barLabelSide, textColors, useCustomRange, customStart, customEnd, printOptions, printOptionsVersion: PRINT_OPTIONS_VERSION },
       xer: { version, projectId, projectName: xerProjectName, calendarName, exportDate },
+    });
+  };
+
+  /**
+   * Batch 26 — re-render the preview when a "Print content" toggle changes, so the
+   * file being previewed stays the file that gets downloaded.
+   */
+  const handlePrintOptionChange = (patch) => {
+    const next = { ...printOptions, ...patch };
+    setPrintOptions(next);
+    saveSettings({
+      pdf: { companyName, programmeRef, subtitle, fitOnePage, fontScale, barLabel, barLabelSide, textColors, useCustomRange, customStart, customEnd, printOptions: next, printOptionsVersion: PRINT_OPTIONS_VERSION },
+      xer: { version, projectId, projectName: xerProjectName, calendarName, exportDate },
+    });
+    const buildOptions = { ...buildPdfOptions(), ...next, embedData: embedDataRef.current };
+    const { doc, filename, pageCount } = buildGanttPDF(buildOptions);
+    pdfDocRef.current = doc;
+    const blob = doc.output("blob");
+    const url = URL.createObjectURL(blob);
+    setPdfPreview((prev) => {
+      if (prev?.url) URL.revokeObjectURL(prev.url);
+      return { url, filename, pageCount, builtAt: Date.now(), sizeBytes: blob?.size ?? null };
+    });
+  };
+
+  /**
+   * Batch 31 — the bar-text switches are also offered in the Print Preview. They
+   * are a *shared* setting (Gantt Bars ▸ Bar Info), so changing one here updates
+   * the chart as well; the preview is rebuilt with the NEW bar object right away
+   * because React state has not been applied yet at this point.
+   */
+  const barInfo = { showName: false, showStart: false, showFinish: false, ...((ds.bar && ds.bar.info) || {}) };
+  const handleBarInfoChange = (patch) => {
+    const nextBar = { ...(ds.bar || {}), info: { ...barInfo, ...patch } };
+    updateDisplay({ bar: nextBar });
+    const { doc, filename, pageCount } = buildGanttPDF({
+      ...buildPdfOptions({ bar: nextBar }),
+      embedData: embedDataRef.current,
+    });
+    pdfDocRef.current = doc;
+    const blob = doc.output("blob");
+    const url = URL.createObjectURL(blob);
+    setPdfPreview((prev) => {
+      if (prev?.url) URL.revokeObjectURL(prev.url);
+      return { url, filename, pageCount, builtAt: Date.now(), sizeBytes: blob?.size ?? null };
+    });
+  };
+
+  /**
+   * Batch 34/36/37 — "Comparison bars" in the preview is the *print* switch (default OFF);
+   * the chart draws its comparison bars whenever the compared dates differ. The Display
+   * panel's "Comparison Arrows" switch (programme `showComparison`) is therefore a
+   * different thing and no longer affects either renderer's bars.
+   *
+   * On a tick the preview is rebuilt right away, and the programme flags are flipped as
+   * well so the chart's comparison arrows stay in step with the printout.
+   */
+  /**
+   * Batch 39 — "Comparison arrows" (the chart's finish-date comparison between adjacent
+   * programmes) is offered in the preview as a print option. Ticking it also opens the
+   * programmes' Compare flag (`showComparison`), because the chart gates the arrows on it
+   * and every imported programme carries it as `false`; the rebuild uses the patched task
+   * array so the arrows appear immediately.
+   */
+  const pdfPreviewFrom = (buildOptions) => {
+    const { doc, filename, pageCount } = buildGanttPDF(buildOptions);
+    pdfDocRef.current = doc;
+    const blob = doc.output("blob");
+    const url = URL.createObjectURL(blob);
+    setPdfPreview((prev) => {
+      if (prev?.url) URL.revokeObjectURL(prev.url);
+      return { url, filename, pageCount, builtAt: Date.now(), sizeBytes: blob?.size ?? null };
+    });
+  };
+
+  /**
+   * Batch 45 — CJK font. Loaded lazily and only when the printed text really contains
+   * non-Latin characters (title, company, footers or any activity), so a Latin-only
+   * programme never downloads the 11 MB font. Once it is there, an open preview is rebuilt
+   * so the Chinese stops being "?" immediately.
+   */
+  const needsCjk = useMemo(
+    () => programmeNeedsCjk(tasks, [projectTitle, companyName, subtitle, programmeRef, footerLeft, footerCenter, footerRight]),
+    [tasks, projectTitle, companyName, subtitle, programmeRef, footerLeft, footerCenter, footerRight],
+  );
+
+  useEffect(() => {
+    if (!printOptions.embedCjkFont || !needsCjk || cjkFont) return undefined;
+    let cancelled = false;
+    setCjkStatus("loading");
+    loadCjkFont()
+      .then((base64) => { if (!cancelled) { setCjkFont(base64); setCjkStatus("ready"); } })
+      .catch(() => { if (!cancelled) setCjkStatus("error"); });
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsCjk, cjkFont, printOptions.embedCjkFont]);
+
+  /**
+   * When the font arrives while the preview is already open, rebuild it once so the Chinese
+   * replaces the "?" placeholders without the user having to touch any option.
+   */
+  const cjkRebuiltRef = useRef(false);
+  useEffect(() => {
+    if (!cjkFont || cjkRebuiltRef.current || !pdfPreviewUrlRef.current) return;
+    cjkRebuiltRef.current = true;
+    pdfPreviewFrom({
+      ...buildPdfOptions(),
+      ...printOptions,
+      cjkFont: { name: CJK_FONT_NAME, base64: cjkFont },
+      embedData: embedDataRef.current,
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cjkFont]);
+
+  const handleComparisonArrowsChange = (value) => {
+    const on = !!value;
+    if (on && onToggleComparisonBars) onToggleComparisonBars(true);
+    const nextPrint = { ...printOptions, showComparisonArrows: on };
+    setPrintOptions(nextPrint);
+    saveSettings({
+      pdf: { companyName, programmeRef, subtitle, fitOnePage, fontScale, barLabel, barLabelSide, textColors, useCustomRange, customStart, customEnd, printOptions: nextPrint, printOptionsVersion: PRINT_OPTIONS_VERSION },
+      xer: { version, projectId, projectName: xerProjectName, calendarName, exportDate },
+    });
+    pdfPreviewFrom({
+      ...buildPdfOptions(),
+      ...nextPrint,
+      tasks: on ? withComparisonFlag(tasks, true) : tasks,
+      embedData: embedDataRef.current,
+    });
+  };
+
+  /**
+   * Batch 45 — the "Chinese / CJK text" switch. Turning it on loads the font first (so the
+   * preview that is rebuilt right after already has real Chinese), turning it off rebuilds
+   * without it.
+   */
+  const handleCjkFontChange = (value) => {
+    const on = !!value;
+    const nextPrint = { ...printOptions, embedCjkFont: on };
+    setPrintOptions(nextPrint);
+    saveSettings({
+      pdf: { companyName, programmeRef, subtitle, fitOnePage, fontScale, barLabel, barLabelSide, textColors, useCustomRange, customStart, customEnd, printOptions: nextPrint, printOptionsVersion: PRINT_OPTIONS_VERSION },
+      xer: { version, projectId, projectName: xerProjectName, calendarName, exportDate },
+    });
+    const rebuild = (base64) => pdfPreviewFrom({
+      ...buildPdfOptions(),
+      ...nextPrint,
+      cjkFont: base64 ? { name: CJK_FONT_NAME, base64 } : null,
+      embedData: embedDataRef.current,
+    });
+    if (!on) { rebuild(null); return; }
+    if (cjkFont) { rebuild(cjkFont); return; }
+    setCjkStatus("loading");
+    loadCjkFont()
+      .then((base64) => { setCjkFont(base64); setCjkStatus("ready"); rebuild(base64); })
+      .catch(() => setCjkStatus("error"));
+  };
+
+  const handleComparisonBarsChange = (value) => {
+    const on = !!value;
+    if (onToggleComparisonBars) onToggleComparisonBars(on);
+    const nextPrint = { ...printOptions, showComparisonBars: on };
+    setPrintOptions(nextPrint);
+    saveSettings({
+      pdf: { companyName, programmeRef, subtitle, fitOnePage, fontScale, barLabel, barLabelSide, textColors, useCustomRange, customStart, customEnd, printOptions: nextPrint, printOptionsVersion: PRINT_OPTIONS_VERSION },
+      xer: { version, projectId, projectName: xerProjectName, calendarName, exportDate },
+    });
+    const { doc, filename, pageCount } = buildGanttPDF({
+      ...buildPdfOptions(),
+      ...nextPrint,
+      tasks: withComparisonFlag(tasks, on),
+      embedData: embedDataRef.current,
+    });
+    pdfDocRef.current = doc;
+    const blob = doc.output("blob");
+    const url = URL.createObjectURL(blob);
+    setPdfPreview((prev) => {
+      if (prev?.url) URL.revokeObjectURL(prev.url);
+      return { url, filename, pageCount, builtAt: Date.now(), sizeBytes: blob?.size ?? null };
     });
   };
 
@@ -1286,6 +1528,16 @@ Return the selected relationships as: predId, succId, type, lag (integer), reaso
           pdfUrl={pdfPreview.url}
           filename={pdfPreview.filename}
           pageCount={pdfPreview.pageCount}
+          builtAt={pdfPreview.builtAt}
+          sizeBytes={pdfPreview.sizeBytes}
+          printOptions={printOptions}
+          onPrintOptionChange={handlePrintOptionChange}
+          barInfo={barInfo}
+          onBarInfoChange={handleBarInfoChange}
+          onComparisonChange={handleComparisonBarsChange}
+          onComparisonArrowsChange={handleComparisonArrowsChange}
+          onCjkFontChange={handleCjkFontChange}
+          cjkStatus={cjkStatus}
           onDownload={handleDownloadPreviewedPdf}
           onClose={closePdfPreview}
         />
